@@ -5,11 +5,11 @@
 - Tagline: *Movilidad segura guiada por datos*.
 
 ## Colores base
-- Azul principal: `#1551A1`
+- Azul principal: `#123E7A`
 - Azul acento: `#0D6EFD`
-- Fondo neutro: `#F5F7FB`
-- Texto base: `#1E2A35`
+- Fondo neutro: `#F4F8FC`
+- Texto base: `#14263A`
 
 ## Activos
-- `public/assets/img/logo-placeholder.svg`
-- `public/assets/img/logo-mark.svg`
+- `frontend/public/assets/img/logo-placeholder.svg`
+- `frontend/public/assets/img/logo-mark.svg`
