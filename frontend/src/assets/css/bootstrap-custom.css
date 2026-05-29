@@ -1,0 +1,128 @@
+@import 'bootstrap/dist/css/bootstrap.min.css';
+
+:root {
+  color-scheme: light;
+  --movilidata-navy: #123e7a;
+  --movilidata-sky: #71c7ff;
+  --movilidata-ice: #edf7ff;
+  --movilidata-bg: #f4f8fc;
+  --movilidata-ink: #14263a;
+  --movilidata-muted: #5d7288;
+  --movilidata-warn: #b85c00;
+  --movilidata-danger: #a31f34;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(113, 199, 255, 0.18), transparent 24%),
+    radial-gradient(circle at 85% 0%, rgba(18, 62, 122, 0.12), transparent 28%),
+    linear-gradient(180deg, #f9fbfd 0%, var(--movilidata-bg) 100%);
+  color: var(--movilidata-ink);
+  font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.brand-title {
+  color: var(--movilidata-navy);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+}
+
+.hero-shell {
+  position: relative;
+  overflow: hidden;
+}
+
+.hero-shell::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(18, 62, 122, 0.88), rgba(13, 110, 253, 0.8));
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.map-container {
+  height: 460px;
+  border-radius: 22px;
+}
+
+.card {
+  border: 1px solid rgba(18, 62, 122, 0.08);
+  border-radius: 22px;
+  box-shadow: 0 16px 40px rgba(16, 28, 42, 0.08);
+  backdrop-filter: blur(10px);
+}
+
+.card-body {
+  padding: 1.25rem;
+}
+
+.kpi {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  background: rgba(18, 62, 122, 0.08);
+  color: var(--movilidata-navy);
+  font-weight: 700;
+}
+
+.soft-panel {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.badge-risk-alta {
+  background: rgba(163, 31, 52, 0.12);
+  color: var(--movilidata-danger);
+}
+
+.badge-risk-media {
+  background: rgba(184, 92, 0, 0.12);
+  color: var(--movilidata-warn);
+}
+
+.badge-risk-baja {
+  background: rgba(35, 120, 67, 0.12);
+  color: #237843;
+}
+
+.alert-soft {
+  border: 1px solid rgba(18, 62, 122, 0.12);
+  background: rgba(237, 247, 255, 0.92);
+  color: var(--movilidata-ink);
+}
+
+.btn-primary {
+  --bs-btn-bg: var(--movilidata-navy);
+  --bs-btn-border-color: var(--movilidata-navy);
+  --bs-btn-hover-bg: #0e315f;
+  --bs-btn-hover-border-color: #0e315f;
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--movilidata-navy);
+  --bs-btn-border-color: rgba(18, 62, 122, 0.24);
+  --bs-btn-hover-bg: var(--movilidata-navy);
+  --bs-btn-hover-border-color: var(--movilidata-navy);
+}
+
+.form-range::-webkit-slider-thumb {
+  background: var(--movilidata-navy);
+}
+
+.form-range::-moz-range-thumb {
+  background: var(--movilidata-navy);
+}
+
+@media (max-width: 768px) {
+  .map-container {
+    height: 320px;
+  }
+}
