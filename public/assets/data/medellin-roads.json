@@ -1,0 +1,22 @@
+[
+  { "name": "Autopista Norte (Caribe)", "point": [6.2832, -75.5671] },
+  { "name": "Autopista Sur (Itagüí)", "point": [6.1950, -75.5860] },
+  { "name": "Av. El Poblado (Sur)", "point": [6.2100, -75.5700] },
+  { "name": "Av. El Poblado (Norte)", "point": [6.2476, -75.5658] },
+  { "name": "Av. Las Vegas", "point": [6.2050, -75.5750] },
+  { "name": "Calle 80 / San Juan (Oeste)", "point": [6.2530, -75.5900] },
+  { "name": "Calle 80 / San Juan (Este)", "point": [6.2530, -75.5700] },
+  { "name": "Av. Regional (Sur)", "point": [6.2300, -75.5750] },
+  { "name": "Av. Regional (Norte)", "point": [6.2700, -75.5700] },
+  { "name": "Carrera 65 / Guayabal", "point": [6.2200, -75.5850] },
+  { "name": "Avenida 33", "point": [6.2450, -75.5800] },
+  { "name": "Calle Colombia", "point": [6.2518, -75.5636] },
+  { "name": "Transversal Inferior", "point": [6.2350, -75.5600] },
+  { "name": "Transversal Superior", "point": [6.2600, -75.5580] },
+  { "name": "Av. 80 (Robledo)", "point": [6.2750, -75.5900] },
+  { "name": "Carrera 70", "point": [6.2550, -75.5950] },
+  { "name": "Calle 10 (Sur)", "point": [6.2380, -75.5720] },
+  { "name": "Av. Ferrocarril", "point": [6.2650, -75.5750] },
+  { "name": "Puente Madre Laura", "point": [6.2720, -75.5680] },
+  { "name": "Glorieta Aguacatala", "point": [6.2180, -75.5680] }
+]
