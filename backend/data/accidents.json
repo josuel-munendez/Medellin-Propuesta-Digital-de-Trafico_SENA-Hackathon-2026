@@ -1,0 +1,14 @@
+[
+  {"lat": 6.2518, "lng": -75.5636, "hour": 7, "intensity": 8, "date": "2026-05-18"},
+  {"lat": 6.2421, "lng": -75.5792, "hour": 8, "intensity": 7, "date": "2026-05-18"},
+  {"lat": 6.2304, "lng": -75.5698, "hour": 9, "intensity": 6, "date": "2026-05-18"},
+  {"lat": 6.2472, "lng": -75.5903, "hour": 12, "intensity": 9, "date": "2026-05-19"},
+  {"lat": 6.2653, "lng": -75.5711, "hour": 14, "intensity": 7, "date": "2026-05-19"},
+  {"lat": 6.2791, "lng": -75.5639, "hour": 17, "intensity": 10, "date": "2026-05-20"},
+  {"lat": 6.2165, "lng": -75.5886, "hour": 18, "intensity": 8, "date": "2026-05-20"},
+  {"lat": 6.1983, "lng": -75.5774, "hour": 20, "intensity": 5, "date": "2026-05-21"},
+  {"lat": 6.2388, "lng": -75.5482, "hour": 21, "intensity": 6, "date": "2026-05-21"},
+  {"lat": 6.2494, "lng": -75.6012, "hour": 22, "intensity": 5, "date": "2026-05-21"},
+  {"lat": 6.2596, "lng": -75.5755, "hour": 6, "intensity": 7, "date": "2026-05-22"},
+  {"lat": 6.2449, "lng": -75.5572, "hour": 16, "intensity": 8, "date": "2026-05-22"}
+]

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Logo placeholder Medellín Movilidata OS">
+  <rect width="512" height="512" rx="72" fill="#123e7a"/>
+  <path d="M114 332h54v66h-54zm114-94h54v160h-54zm114 44h54v116h-54z" fill="#8cd4ff"/>
+  <path d="M92 220l73-62 70 48 95-76 90 72" fill="none" stroke="#fff" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

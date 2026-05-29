@@ -1,81 +1,57 @@
 # Medellín Movilidata OS
 
-Aplicación web front-end (hackathon HackData CTGI SENA 2026) para visualizar siniestralidad, congestión y alertas climáticas de movilidad en Medellín.
+MVP full stack para HackData CTGI SENA 2026 con backend en Django REST, frontend en Vue 3 y soporte PWA.
 
-## Objetivo
-Reducir riesgos de movilidad urbana mediante:
-- Identificación de puntos críticos de accidentes.
-- Lectura de tendencias horarias de accidentalidad y congestión.
-- Alertas de seguridad en escenarios de lluvia.
+## Estructura
+- `backend/` Proyecto Django + SQLite + DRF
+- `frontend/` SPA Vue 3 + Vite + PWA
+- `docs/` Manual técnico, manual de usuario y guía de marca
+- `screenshots/` Capturas de pantalla de soporte
 
-## Tecnologías
-- Vue 3 + Vite
-- Bootstrap 5
-- Leaflet + leaflet.heat
-- Chart.js
-- PWA con vite-plugin-pwa
-- Datos estáticos JSON (sin backend)
-
-## Estructura principal
-- `src/main.js`, `src/App.vue`
-- `src/assets/css/`, `src/assets/js/`
-- `public/assets/data/` (JSON de muestra)
-- `public/assets/img/` (logos placeholder)
-- `docs/` (manual técnico, usuario y branding)
-- `screenshots/` (espacio para capturas)
+## Arquitectura
+- **Model**: `backend/api/models.py` define `Accident` y `Zone`.
+- **View/Controller**: `backend/api/views.py` expone la API REST.
+- **View**: `frontend/src/App.vue` consume la API y renderiza el dashboard.
 
 ## Requisitos
-- Node.js 20+
-- npm 10+
+- Python 3.11+ para backend
+- Node.js 20+ y npm 10+ para frontend
 
-## Instalación y ejecución
+## Backend
 ```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py load_data
+python manage.py runserver
+```
+
+API principal:
+- `GET /api/accidents/`
+- `GET /api/accidents/?hour_from=6&hour_to=12`
+- `GET /api/zones/`
+- `GET /api/weather/`
+- `POST /api/simulate_rain/`
+
+## Frontend
+```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-## Build de producción
-```bash
-npm run build
-npm run preview
-```
+El frontend consume `http://localhost:8000/api/...` por defecto. Si necesitas otra URL, define `VITE_API_BASE_URL`.
 
 ## PWA
-La aplicación incluye:
-- `manifest.json` generado por Vite PWA
-- Service Worker con fallback a `offline.html`
-
-## Clima en vivo (opcional)
-Para usar OpenWeatherMap, crea un archivo `.env`:
-```bash
-VITE_OPENWEATHER_API_KEY=tu_api_key
-```
-Si no hay API key, se muestra clima simulado para demo.
-
-## Datos reales de Medellín
-Reemplaza los archivos:
-- `public/assets/data/accidents.json`
-- `public/assets/data/traffic.json`
-
-Mantén el mismo formato de claves para no romper el dashboard.
+- Manifest y service worker con `vite-plugin-pwa`
+- Fallback offline en `frontend/public/offline.html`
 
 ## Despliegue
-### Netlify
-1. Conecta el repositorio.
-2. Build command: `npm run build`
-3. Publish directory: `dist`
+- En desarrollo se ejecutan backend y frontend por separado.
+- Para producción, puedes compilar Vue y servirlo detrás de Django o publicarlo aparte.
 
-### GitHub Pages
-1. Ejecuta `npm run build`.
-2. Publica la carpeta `dist` con la estrategia que uses en tu flujo CI/CD.
-
-## Capturas
-Agregar imágenes en `screenshots/` y enlazarlas aquí.
-
-## Video demo
-Agregar enlace del video demo aquí: **[pendiente]**
-
-## Equipo (placeholder)
-- Rol 1: Pendiente
-- Rol 2: Pendiente
-- Rol 3: Pendiente
+## Evidencias
+- Agrega capturas en `screenshots/`.
+- Completa el video demo cuando esté listo.
