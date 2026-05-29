@@ -1,0 +1,12 @@
+[
+  { "lat": 6.2518, "lng": -75.5636, "hour": 7, "intensity": 0.8 },
+  { "lat": 6.2421, "lng": -75.5792, "hour": 8, "intensity": 0.7 },
+  { "lat": 6.2304, "lng": -75.5698, "hour": 9, "intensity": 0.6 },
+  { "lat": 6.2472, "lng": -75.5903, "hour": 12, "intensity": 0.9 },
+  { "lat": 6.2653, "lng": -75.5711, "hour": 14, "intensity": 0.7 },
+  { "lat": 6.2791, "lng": -75.5639, "hour": 17, "intensity": 1.0 },
+  { "lat": 6.2165, "lng": -75.5886, "hour": 18, "intensity": 0.8 },
+  { "lat": 6.1983, "lng": -75.5774, "hour": 20, "intensity": 0.5 },
+  { "lat": 6.2388, "lng": -75.5482, "hour": 21, "intensity": 0.6 },
+  { "lat": 6.2494, "lng": -75.6012, "hour": 22, "intensity": 0.5 }
+]

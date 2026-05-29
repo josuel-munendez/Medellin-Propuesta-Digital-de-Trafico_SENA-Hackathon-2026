@@ -1,0 +1,36 @@
+@import 'bootstrap/dist/css/bootstrap.min.css';
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+  color: #1e2a35;
+  font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.brand-title {
+  color: #1551a1;
+  font-weight: 700;
+}
+
+.card-value {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.map-container {
+  height: 420px;
+}
+
+@media (max-width: 768px) {
+  .map-container {
+    height: 320px;
+  }
+}
