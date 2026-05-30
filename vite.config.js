@@ -2,10 +2,18 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  optimizeDeps: {
+    exclude: ['mapbox-gl'],
+  },
+  server: {
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+  },
   plugins: [
     vue(),
-    VitePWA({
+    command === 'build' && VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
       manifestFilename: 'manifest.json',
@@ -38,5 +46,5 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,json}'],
       },
     }),
-  ],
-})
+  ].filter(Boolean),
+}))
