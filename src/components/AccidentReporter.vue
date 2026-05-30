@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import L from 'leaflet'
+import * as L from 'leaflet'
 import 'leaflet.heat'
 import {
   buildHeatPoints,
@@ -10,6 +10,9 @@ import {
   severityColor,
   severityLabel,
 } from '../composables/useAccidentReports'
+import { fetchAccidents, createAdminAccident } from '../services/api.js'
+
+const TOKEN_KEY = 'movilidata-auth-token'
 
 const mapContainer = ref(null)
 const mapReady = ref(false)
@@ -17,6 +20,8 @@ const loading = ref(true)
 const incidents = ref([])
 const filterSeverity = ref('all')
 const lastSaved = ref(null)
+const apiConnected = ref(false)
+const apiError = ref('')
 
 const form = reactive({
   lat: '6.2518',
@@ -109,24 +114,50 @@ function renderMapLayers() {
 
 async function loadIncidents() {
   loading.value = true
+  apiError.value = ''
 
   try {
-    const [baseResponse] = await Promise.all([
-      fetch('/assets/data/accidents.json'),
-    ])
+    // Intentar cargar desde Django API primero
+    const apiAccidents = await fetchAccidents()
+    apiConnected.value = true
 
-    const baseAccidents = await baseResponse.json()
-    const normalizedBase = Array.isArray(baseAccidents)
-      ? baseAccidents.map((item) => normalizeIncident(item, 'dataset'))
+    const normalizedApi = Array.isArray(apiAccidents)
+      ? apiAccidents.map((item) => normalizeIncident({
+          ...item,
+          severity: item.intensity >= 8 ? 'critical' : item.intensity >= 6 ? 'high' : item.intensity >= 4 ? 'medium' : 'low',
+          type: 'Accidente vial',
+          status: 'reportado',
+          description: `Intensidad ${item.intensity}/10 a las ${String(item.hour).padStart(2, '0')}:00`,
+        }, 'api'))
       : []
-    const storedAccidents = loadStoredAccidents()
 
-    incidents.value = [...normalizedBase, ...storedAccidents]
+    // Combinar con reportes locales del usuario
+    const storedAccidents = loadStoredAccidents()
+    incidents.value = [...normalizedApi, ...storedAccidents]
     lastSaved.value = storedAccidents.length ? new Date().toISOString() : null
 
     renderMapLayers()
-  } catch (error) {
-    console.error('Error al cargar reportes de accidentes:', error)
+  } catch (err) {
+    // Fallback: cargar desde JSON estático si la API no está disponible
+    apiConnected.value = false
+    apiError.value = 'Django API no disponible — usando datos estáticos locales.'
+    console.warn('[AccidentReporter] API fallback:', err.message)
+
+    try {
+      const baseResponse = await fetch('/assets/data/accidents.json')
+      const baseAccidents = await baseResponse.json()
+      const normalizedBase = Array.isArray(baseAccidents)
+        ? baseAccidents.map((item) => normalizeIncident(item, 'dataset'))
+        : []
+      const storedAccidents = loadStoredAccidents()
+
+      incidents.value = [...normalizedBase, ...storedAccidents]
+      lastSaved.value = storedAccidents.length ? new Date().toISOString() : null
+
+      renderMapLayers()
+    } catch (fallbackError) {
+      console.error('Error al cargar reportes de accidentes:', fallbackError)
+    }
   } finally {
     loading.value = false
   }
@@ -152,11 +183,13 @@ function resetForm() {
   form.description = ''
 }
 
-function handleSubmit() {
+async function handleSubmit() {
   const lat = Number(form.lat)
   const lng = Number(form.lng)
 
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+
+  const intensity = form.severity === 'critical' ? 10 : form.severity === 'high' ? 7 : form.severity === 'medium' ? 5 : 2
 
   const incident = normalizeIncident(
     {
@@ -166,14 +199,30 @@ function handleSubmit() {
       type: form.type,
       status: form.status,
       description: form.description.trim() || 'Reporte generado desde la plataforma.',
-      intensity: form.severity === 'critical' ? 1 : form.severity === 'high' ? 0.85 : form.severity === 'medium' ? 0.65 : 0.45,
+      intensity,
+      hour: new Date().getHours(),
       reportedAt: new Date().toISOString(),
     },
     'user'
   )
 
+  // Intentar guardar en Django si hay token de admin
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token && apiConnected.value) {
+    try {
+      await createAdminAccident(token, {
+        lat,
+        lng,
+        intensity,
+        hour: new Date().getHours(),
+      })
+    } catch (err) {
+      console.warn('[AccidentReporter] No se pudo guardar en Django:', err.message)
+    }
+  }
+
   incidents.value = [incident, ...incidents.value]
-  persistStoredAccidents(incidents.value.filter((item) => item.source !== 'dataset'))
+  persistStoredAccidents(incidents.value.filter((item) => item.source !== 'dataset' && item.source !== 'api'))
   renderMapLayers()
   lastSaved.value = new Date().toISOString()
   resetForm()
@@ -202,7 +251,11 @@ onBeforeUnmount(() => {
         </p>
       </div>
       <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
-        <span class="badge bg-danger px-3 py-2 rounded-pill shadow-sm">Centro de Reporte Activo</span>
+        <span class="badge px-3 py-2 rounded-pill shadow-sm"
+          :class="apiConnected ? 'bg-success' : 'bg-warning text-dark'">
+          <span v-if="apiConnected" class="spinner-grow spinner-grow-sm me-1" style="animation-duration:1.5s;"></span>
+          {{ apiConnected ? 'Conectado a Django API' : 'Modo offline (datos estáticos)' }}
+        </span>
       </div>
     </div>
 
@@ -234,8 +287,8 @@ onBeforeUnmount(() => {
       <div class="col-6 col-xl-3">
         <div class="stat-card card border-0 shadow-sm h-100">
           <div class="card-body">
-            <div class="stat-value text-primary">{{ mapReady ? 'Mapa' : '...' }}</div>
-            <div class="stat-label text-muted">Estado de visualización</div>
+            <div class="stat-value text-primary">{{ apiConnected ? 'API' : 'Local' }}</div>
+            <div class="stat-label text-muted">Fuente de datos</div>
           </div>
         </div>
       </div>

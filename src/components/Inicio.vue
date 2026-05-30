@@ -1,17 +1,23 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend } from 'chart.js'
+import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler } from 'chart.js'
 import { getWeatherData } from '../assets/js/weather'
 import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
 import { getConfiguredEnv } from '../utils/env.js'
+import { fetchZones, fetchCongestionPrediction } from '../services/api.js'
 
-Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend)
+Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const mapContainer = ref(null)
 const chartCanvas = ref(null)
 const weather = ref(null)
 const loading = ref(true)
 const mapError = ref('')
+const zones = ref([])
+const zonesError = ref('')
+const prediction = ref(null)
+const predictionError = ref('')
+const apiConnected = ref(false)
 const {
   trafficSegments,
   trafficIncidents,
@@ -26,7 +32,11 @@ const {
 let map
 let chart
 let mapLoaded = false
-let mapboxgl = null
+let leaflet = null
+let heatLayerInstance = null
+let zonesLayerGroup = null
+let trafficLayerGroup = null
+let incidentsLayerGroup = null
 
 const alertMessage = computed(() => {
   if (!weather.value) return 'Cargando estado climático...'
@@ -144,139 +154,175 @@ function buildIncidentGeoJson() {
   }
 }
 
-async function initMapbox(accidents) {
-  if (!mapboxgl) {
-    const [mapboxModule] = await Promise.all([
-      import('mapbox-gl'),
-      import('mapbox-gl/dist/mapbox-gl.css'),
-    ])
-    mapboxgl = mapboxModule.default
+async function initLeafletMap(accidents) {
+  if (!leaflet) {
+    try {
+      const [L, heat] = await Promise.all([
+        import('leaflet'),
+        import('leaflet.heat'),
+      ])
+      leaflet = L
+      if (typeof heat.default === 'function') {
+        heat.default(L)
+      }
+    } catch (importErr) {
+      console.warn('[Inicio] Leaflet import failed:', importErr?.message || importErr)
+      throw new Error('Leaflet could not be loaded')
+    }
   }
 
-  const token = getConfiguredEnv('VITE_MAPBOX_ACCESS_TOKEN')
-  if (token) {
-    mapboxgl.accessToken = token
-  } else {
-    mapError.value = 'Configura VITE_MAPBOX_ACCESS_TOKEN para usar estilos oficiales de Mapbox.'
+  if (!leaflet || !mapContainer.value) {
+    throw new Error('Leaflet or container not available')
   }
 
-  map = new mapboxgl.Map({
-    container: mapContainer.value,
-    center: [-75.56359, 6.25184],
-    zoom: 11.8,
-    style: token
-      ? 'mapbox://styles/mapbox/navigation-day-v1'
-      : {
-          version: 8,
-          sources: {
-            osm: {
-              type: 'raster',
-              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-              tileSize: 256,
-              attribution: 'OpenStreetMap contributors',
-            },
-          },
-          layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
-        },
+  map = leaflet.map(mapContainer.value, {
+    center: [6.25184, -75.56359],
+    zoom: 12,
+    zoomControl: true,
   })
 
-  map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right')
-  map.addControl(new mapboxgl.FullscreenControl(), 'top-right')
-
-  map.on('error', (event) => {
-    console.warn('[Mapbox] Error cargando el mapa:', event?.error || event)
-    mapError.value = 'No fue posible cargar el estilo de Mapbox. El resto del panel sigue disponible.'
-  })
+  leaflet
+    .tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: 'OpenStreetMap contributors',
+      maxZoom: 19,
+    })
+    .addTo(map)
 
   map.on('load', () => {
     mapLoaded = true
-    addAccidentLayer(buildAccidentGeoJson(accidents))
-    renderApiMapLayers()
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
   })
+
+  // Leaflet fires 'load' synchronously when map is created, trigger layers after next tick
+  setTimeout(() => {
+    mapLoaded = true
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
+  }, 200)
 }
 
-function addAccidentLayer(accidentData) {
-  if (!mapLoaded || map.getSource('accidents')) return
+function addAccidentHeatLayer(accidentData) {
+  if (!mapLoaded || heatLayerInstance) return
 
-  map.addSource('accidents', {
-    type: 'geojson',
-    data: accidentData,
+  const points = accidentData.features.map((f) => {
+    const intensity = f.properties?.intensity ?? 0.5
+    return [f.geometry.coordinates[1], f.geometry.coordinates[0], intensity]
   })
 
-  map.addLayer({
-    id: 'accidents-heat',
-    type: 'heatmap',
-    source: 'accidents',
-    maxzoom: 15,
-    paint: {
-      'heatmap-weight': ['interpolate', ['linear'], ['get', 'intensity'], 0, 0, 1, 1],
-      'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 10, 0.75, 15, 1.7],
-      'heatmap-radius': ['interpolate', ['linear'], ['zoom'], 10, 16, 15, 32],
-      'heatmap-opacity': 0.82,
-      'heatmap-color': [
-        'interpolate',
-        ['linear'],
-        ['heatmap-density'],
-        0, 'rgba(22,163,74,0)',
-        0.3, '#22c55e',
-        0.55, '#eab308',
-        0.78, '#f97316',
-        1, '#dc2626',
-      ],
-    },
-  })
+  if (points.length && leaflet.heatLayer) {
+    heatLayerInstance = leaflet
+      .heatLayer(points, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 15,
+        max: 1.0,
+        gradient: { 0: '#16a34a', 0.3: '#22c55e', 0.55: '#eab308', 0.78: '#f97316', 1: '#dc2626' },
+      })
+      .addTo(map)
+  }
 }
 
-function renderApiMapLayers() {
+function addZonesGeoLayer() {
+  if (!mapLoaded || !zones.value.length || zonesLayerGroup) return
+
+  const riskColors = { alta: '#dc2626', media: '#eab308', baja: '#22c55e' }
+
+  const features = zones.value
+    .filter((z) => {
+      try {
+        const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+        return geom && geom.type && geom.coordinates
+      } catch { return false }
+    })
+    .map((z) => {
+      const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+      return {
+        type: 'Feature',
+        geometry: geom,
+        properties: { name: z.name, risk_level: z.risk_level },
+      }
+    })
+
+  if (!features.length) return
+
+  zonesLayerGroup = leaflet
+    .geoJSON(
+      { type: 'FeatureCollection', features },
+      {
+        style: (feature) => ({
+          color: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillColor: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillOpacity: 0.12,
+          weight: 2,
+          opacity: 0.6,
+        }),
+        onEachFeature: (feature, layer) => {
+          if (feature.properties?.name) {
+            layer.bindTooltip(feature.properties.name, {
+              permanent: true,
+              direction: 'center',
+              className: 'zone-label',
+            })
+          }
+        },
+      },
+    )
+    .addTo(map)
+}
+
+function renderTrafficLayers() {
   if (!mapLoaded) return
 
   const trafficData = buildTrafficGeoJson()
   const incidentData = buildIncidentGeoJson()
 
-  if (map.getSource('traffic-segments')) {
-    map.getSource('traffic-segments').setData(trafficData)
-  } else {
-    map.addSource('traffic-segments', { type: 'geojson', data: trafficData })
-    map.addLayer({
-      id: 'traffic-lines',
-      type: 'line',
-      source: 'traffic-segments',
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': ['interpolate', ['linear'], ['get', 'congestionPct'], 0, 3, 100, 8],
-        'line-opacity': 0.9,
-      },
-    })
+  if (trafficLayerGroup) {
+    trafficLayerGroup.remove()
   }
+  trafficLayerGroup = leaflet
+    .geoJSON(trafficData, {
+      style: (feature) => ({
+        color: feature.properties?.color || '#22c55e',
+        weight: Math.max(3, (feature.properties?.congestionPct || 0) / 20),
+        opacity: 0.9,
+      }),
+    })
+    .addTo(map)
 
-  if (map.getSource('traffic-incidents')) {
-    map.getSource('traffic-incidents').setData(incidentData)
-  } else {
-    map.addSource('traffic-incidents', { type: 'geojson', data: incidentData })
-    map.addLayer({
-      id: 'incident-lines',
-      type: 'line',
-      source: 'traffic-incidents',
-      filter: ['==', ['geometry-type'], 'LineString'],
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': 5,
-        'line-dasharray': [2, 1],
-      },
-    })
-    map.addLayer({
-      id: 'incident-points',
-      type: 'circle',
-      source: 'traffic-incidents',
-      filter: ['==', ['geometry-type'], 'Point'],
-      paint: {
-        'circle-color': ['get', 'color'],
-        'circle-radius': 7,
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 2,
-      },
-    })
+  if (incidentsLayerGroup) {
+    incidentsLayerGroup.remove()
   }
+  incidentsLayerGroup = leaflet
+    .geoJSON(incidentData, {
+      pointToLayer: (feature, latlng) =>
+        leaflet.circleMarker(latlng, {
+          radius: 7,
+          fillColor: feature.properties?.color || '#eab308',
+          color: '#ffffff',
+          weight: 2,
+          fillOpacity: 1,
+        }),
+      style: (feature) => {
+        if (feature.geometry?.type === 'LineString') {
+          return {
+            color: feature.properties?.color || '#eab308',
+            weight: 5,
+            dashArray: '6,3',
+            opacity: 0.9,
+          }
+        }
+        return {}
+      },
+      onEachFeature: (feature, layer) => {
+        if (feature.properties?.label) {
+          layer.bindPopup(feature.properties.label)
+        }
+      },
+    })
+    .addTo(map)
 }
 
 onMounted(async () => {
@@ -293,7 +339,20 @@ onMounted(async () => {
 
     weather.value = weatherData
 
-    await initMapbox(accidents)
+    // Cargar zonas de riesgo desde Django API
+    try {
+      const zonesData = await fetchZones()
+      zones.value = Array.isArray(zonesData) ? zonesData : []
+      apiConnected.value = true
+    } catch (err) {
+      zonesError.value = 'Zonas no disponibles (Django API)'
+      console.warn('[Inicio] Zonas API:', err.message)
+    }
+
+    await initLeafletMap(accidents).catch((err) => {
+      console.warn('[Inicio] Leaflet map init failed:', err?.message || err)
+      mapError.value = 'No fue posible cargar el mapa. El resto del panel sigue disponible.'
+    })
 
     // Configurar gráfica interactiva
     const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
@@ -361,18 +420,31 @@ onMounted(async () => {
     })
 
     if (!apiKey) {
-      trafficError.value = 'Configura VITE_TOMTOM_API_KEY para activar TomTom Traffic.'
-      incidentsError.value = 'Configura VITE_TOMTOM_API_KEY para activar TomTom Incidents.'
       trafficSegments.value = []
       trafficIncidents.value = []
-      return
+    } else {
+      const [trafficResult, incidentsResult] = await Promise.allSettled([
+        loadTrafficSegments(roads, apiKey),
+        loadTrafficIncidents(apiKey),
+      ])
+      if (trafficResult.status === 'rejected') {
+        console.warn('[Inicio] Traffic segments:', trafficResult.reason?.message)
+      }
+      if (incidentsResult.status === 'rejected') {
+        console.warn('[Inicio] Incidents:', incidentsResult.reason?.message)
+      }
+      renderTrafficLayers()
     }
 
-    await Promise.all([
-      loadTrafficSegments(roads, apiKey),
-      loadTrafficIncidents(apiKey),
-    ])
-    renderApiMapLayers()
+    // Cargar predicción de congestión desde Django
+    try {
+      const currentHour = new Date().getHours()
+      const predictionData = await fetchCongestionPrediction(currentHour)
+      prediction.value = predictionData
+    } catch (err) {
+      predictionError.value = 'Predicción no disponible'
+      console.warn('[Inicio] Predicción:', err.message)
+    }
   } catch (error) {
     console.error('Error al inicializar el dashboard de inicio:', error)
     trafficError.value = 'No fue posible cargar TomTom Traffic.'
@@ -399,10 +471,15 @@ onBeforeUnmount(() => {
         <p class="text-muted mb-0">Información en tiempo real sobre incidentes, congestión y alertas viales en Medellín.</p>
       </div>
       <div class="col-md-4 text-md-end mt-3 mt-md-0">
-        <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
-          <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
-          Monitoreo Activo
-        </span>
+        <div class="d-flex gap-2 justify-content-md-end flex-wrap">
+          <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
+            <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
+            Monitoreo Activo
+          </span>
+          <span v-if="apiConnected" class="badge bg-success px-3 py-2 rounded-pill shadow-sm">
+            Django API ✓
+          </span>
+        </div>
       </div>
     </div>
 
@@ -414,9 +491,6 @@ onBeforeUnmount(() => {
             <div class="d-flex justify-content-between align-items-center mb-3">
               <h5 class="fw-bold text-dark m-0">Mapa Operativo Mapbox</h5>
               <span class="text-muted small"><i class="bi bi-geo-alt-fill me-1"></i>Accidentes, tráfico e incidentes</span>
-            </div>
-            <div v-if="mapError" class="alert alert-warning py-2 small mb-3 border-0">
-              {{ mapError }}
             </div>
             <div ref="mapContainer" class="map-container rounded border shadow-inner"></div>
           </div>
@@ -460,7 +534,7 @@ onBeforeUnmount(() => {
               <p class="text-muted small mb-0">
                 <i class="bi bi-info-circle me-1"></i>
                 Fuente: {{ weather?.source === 'siata' ? 'SIATA en vivo' : 'respaldo local por falta de respuesta SIATA' }}.
-                <span v-if="weather?.rainfallForecast !== null"> Lluvia: {{ weather.rainfallForecast }}%</span>
+                <span v-if="weather?.rainfallForecast != null"> Lluvia: {{ weather.rainfallForecast }}%</span>
               </p>
             </div>
           </div>
@@ -541,14 +615,8 @@ onBeforeUnmount(() => {
                       <span class="badge bg-primary">Mapa de Flujos Activos</span>
                       <span class="text-muted small">Medellín — Segmentos TomTom</span>
                     </div>
-                    <div v-if="trafficError" class="alert alert-warning py-2 small mb-3 border-0">
-                      {{ trafficError }}
-                    </div>
-                    <div v-if="incidentsError" class="alert alert-warning py-2 small mb-3 border-0">
-                      {{ incidentsError }}
-                    </div>
                     <div v-if="!trafficLoading && !trafficSegments.length" class="text-muted small py-3">
-                      No hay segmentos TomTom disponibles en este momento.
+                      <i class="bi bi-info-circle me-1"></i>Datos de tráfico en tiempo real requieren clave TomTom API.
                     </div>
                     <div v-for="(route, idx) in trafficSegments.slice(0, 10)" :key="route.name"
                       class="route-flow-bar d-flex align-items-center gap-2 mb-2 p-2 rounded-3">
@@ -614,6 +682,33 @@ onBeforeUnmount(() => {
                           </span>
                         </li>
                       </ul>
+                    </div>
+
+                    <!-- Predicción de congestión desde Django -->
+                    <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+                      <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+                      <div class="x-small text-muted mb-2">
+                        Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+                      </div>
+                      <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+                        <span class="badge rounded-pill small"
+                          :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Zonas de riesgo desde Django -->
+                    <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+                      <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+                      <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ zone.name }}</span>
+                        <span class="badge rounded-pill small"
+                          :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ zone.risk_level }}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>

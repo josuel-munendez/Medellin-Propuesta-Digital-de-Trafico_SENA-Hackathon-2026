@@ -39,11 +39,16 @@ La aplicación incluye:
 - Service Worker con fallback a `offline.html`
 
 ## Clima en vivo (opcional)
-Para usar OpenWeatherMap, crea un archivo `.env`:
+Para usar OpenWeatherMap, crea un archivo `.env` o `.env.local` en el directorio `frontend`:
 ```bash
 VITE_OPENWEATHER_API_KEY=tu_api_key
 ```
-Si no hay API key, se muestra clima simulado para demo.
+También puedes activar SIATA para clima de Medellín:
+```bash
+SIATA_WEATHER_API_URL=https://api.siata.gov.co/v1/observations?limit=1
+SIATA_API_KEY=
+```
+Si no hay API key o URL, el backend devuelve una respuesta simulada para la demo.
 
 ## Datos reales de Medellín
 Reemplaza los archivos:

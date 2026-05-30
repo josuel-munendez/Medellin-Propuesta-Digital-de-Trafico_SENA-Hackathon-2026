@@ -4,7 +4,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig(({ command }) => ({
   optimizeDeps: {
-    exclude: ['mapbox-gl'],
+    include: ['vue', 'leaflet', 'leaflet.heat', 'chart.js', 'bootstrap'],
   },
   server: {
     host: '127.0.0.1',

@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import 'leaflet/dist/leaflet.css'
-import 'bootstrap/dist/js/bootstrap.bundle.min.js'
+import 'bootstrap'
 import './assets/css/bootstrap-custom.css'
 import App from './App.vue'
 

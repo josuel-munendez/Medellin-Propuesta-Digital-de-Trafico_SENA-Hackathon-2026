@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import L from 'leaflet'
+import * as L from 'leaflet'
 import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
 import { getConfiguredEnv } from '../utils/env.js'
 
@@ -532,9 +532,10 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
-            <div v-if="trafficError || incidentsError" class="mt-3">
-              <div v-if="trafficError" class="alert alert-warning py-2 small mb-2 border-0">{{ trafficError }}</div>
-              <div v-if="incidentsError" class="alert alert-warning py-2 small mb-0 border-0">{{ incidentsError }}</div>
+            <div v-if="(trafficError || incidentsError) && !trafficSegments.length && !trafficIncidents.length" class="mt-3">
+              <div class="alert alert-info py-2 small mb-0 border-0">
+                <i class="bi bi-info-circle me-1"></i>Datos de tráfico en tiempo real requieren clave TomTom API. El rastreo GPS sigue funcionando.
+              </div>
             </div>
             <div class="position-relative">
               <div ref="mapContainer" class="tracker-map rounded border"></div>

@@ -53,6 +53,10 @@ export function fetchWeather() {
   return requestJson('/weather/')
 }
 
+export function fetchSiataWeather() {
+  return requestJson('/siata_weather/')
+}
+
 export function fetchRainStatus() {
   return fetchWeather()
 }
