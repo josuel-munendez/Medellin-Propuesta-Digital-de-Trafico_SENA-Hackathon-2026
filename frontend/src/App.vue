@@ -1,398 +1,128 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import L from 'leaflet'
-import 'leaflet.heat'
-import {
-  Chart,
-  CategoryScale,
-  LineController,
-  LinearScale,
-  LineElement,
-  PointElement,
-  Tooltip,
-  Legend,
-} from 'chart.js'
-import { fetchAccidents, fetchRainStatus, fetchZones, toggleRainStatus } from './api'
+import { computed, ref } from 'vue'
+import Inicio from './components/Inicio.vue'
+import Nosotros from './components/Nosotros.vue'
+import Servicios from './components/Servicios.vue'
+import Contacto from './components/Contacto.vue'
+import Login from './components/Login.vue'
+import RealtimeTracker from './components/RealtimeTracker.vue'
 
-Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend)
+const currentTab = ref('inicio')
+const sidebarOpenMobile = ref(false)
 
-const mapContainer = ref(null)
-const chartCanvas = ref(null)
-const accidents = ref([])
-const zones = ref([])
-const rainStatus = ref({ isRaining: false })
-const hourFrom = ref(0)
-const hourTo = ref(23)
-const loading = ref(true)
-const loadingRain = ref(false)
-const errorMessage = ref('')
-
-let map
-let chart
-let heatLayer
-let zonesLayer
-
-const selectedZoneName = 'Centro'
-
-const selectedZone = computed(() => {
-  return zones.value.find((zone) => zone.name === selectedZoneName) ?? zones.value[0] ?? null
-})
-
-const selectedZoneRisk = computed(() => selectedZone.value?.risk_level ?? 'media')
-
-const alertClass = computed(() => {
-  if (rainStatus.value.isRaining) return 'alert-danger'
-  if (selectedZoneRisk.value === 'alta') return 'alert-warning'
-  if (selectedZoneRisk.value === 'media') return 'alert-soft'
-  return 'alert-success'
-})
-
-const alertMessage = computed(() => {
-  const riskText = {
-    alta: 'La zona Centro mantiene riesgo alto de siniestros.',
-    media: 'La zona seleccionada mantiene un riesgo moderado.',
-    baja: 'La zona seleccionada tiene riesgo bajo en este momento.',
-  }[selectedZoneRisk.value]
-
-  if (rainStatus.value.isRaining) {
-    return `${riskText} Se activó lluvia simulada: reduce velocidad, evita frenadas bruscas y prioriza rutas alternas.`
-  }
-
-  return `${riskText} Condición estable sin lluvia. Mantén conducción preventiva y revisa el horario con más acumulación de incidentes.`
-})
-
-const zoneCountLabel = computed(() => `${zones.value.length} zonas modeladas`)
-const accidentCountLabel = computed(() => `${accidents.value.length} accidentes visibles`)
-
-function normalizeRange() {
-  if (hourFrom.value > hourTo.value) {
-    hourTo.value = hourFrom.value
-  }
+const views = {
+  inicio: Inicio,
+  nosotros: Nosotros,
+  servicios: Servicios,
+  contacto: Contacto,
+  rastreo: RealtimeTracker,
+  login: Login,
 }
 
-function bucketByHour(records, selector) {
-  const buckets = Array.from({ length: 24 }, () => 0)
-  for (const record of records) {
-    const hour = Number(record.hour)
-    if (Number.isInteger(hour) && hour >= 0 && hour <= 23) {
-      buckets[hour] += selector(record)
-    }
-  }
-  return buckets
+const navItems = [
+  { id: 'inicio', label: 'Inicio', icon: 'house' },
+  { id: 'nosotros', label: 'Nosotros', icon: 'people' },
+  { id: 'servicios', label: 'Servicios', icon: 'grid' },
+  { id: 'contacto', label: 'Contacto', icon: 'envelope' },
+  { id: 'rastreo', label: 'Rastreo en Vivo', icon: 'broadcast' },
+  { id: 'login', label: 'Acceso Admin', icon: 'lock' },
+]
+
+const currentTitle = computed(() => navItems.find((item) => item.id === currentTab.value)?.label ?? 'Inicio')
+
+function switchTab(tabId) {
+  currentTab.value = tabId
+  sidebarOpenMobile.value = false
 }
 
-function riskToColor(riskLevel) {
-  if (riskLevel === 'alta') return '#a31f34'
-  if (riskLevel === 'media') return '#b85c00'
-  return '#237843'
+function toggleMobileSidebar() {
+  sidebarOpenMobile.value = !sidebarOpenMobile.value
 }
-
-function riskToOpacity(riskLevel) {
-  if (riskLevel === 'alta') return 0.35
-  if (riskLevel === 'media') return 0.24
-  return 0.18
-}
-
-function parseZoneGeometry(zone) {
-  try {
-    return JSON.parse(zone.geometry)
-  } catch {
-    return null
-  }
-}
-
-function buildHeatPoints(records) {
-  return records
-    .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng))
-    .map((item) => [item.lat, item.lng, Math.max(0.2, Number(item.intensity ?? 1) / 10)])
-}
-
-function renderChart(records) {
-  const labels = Array.from({ length: 24 }, (_, hour) => `${String(hour).padStart(2, '0')}:00`)
-  const accidentSeries = bucketByHour(records, () => 1)
-  const severitySeries = bucketByHour(records, (record) => Number(record.intensity ?? 0))
-
-  if (!chart) {
-    chart = new Chart(chartCanvas.value, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'Accidentes por hora',
-            data: accidentSeries,
-            borderColor: '#123e7a',
-            backgroundColor: 'rgba(18,62,122,0.16)',
-            tension: 0.32,
-          },
-          {
-            label: 'Intensidad acumulada',
-            data: severitySeries,
-            borderColor: '#0d6efd',
-            backgroundColor: 'rgba(13,110,253,0.16)',
-            tension: 0.32,
-            yAxisID: 'y1',
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: {
-            labels: {
-              usePointStyle: true,
-            },
-          },
-        },
-        scales: {
-          y: {
-            beginAtZero: true,
-            title: { display: true, text: 'Eventos' },
-          },
-          y1: {
-            beginAtZero: true,
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: 'Intensidad' },
-          },
-        },
-      },
-    })
-    return
-  }
-
-  chart.data.labels = labels
-  chart.data.datasets[0].data = accidentSeries
-  chart.data.datasets[1].data = severitySeries
-  chart.update()
-}
-
-function renderMap(records, zoneList) {
-  if (!map) {
-    map = L.map(mapContainer.value, {
-      zoomControl: true,
-    }).setView([6.2442, -75.5812], 12)
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    }).addTo(map)
-  }
-
-  if (heatLayer) {
-    heatLayer.remove()
-  }
-
-  if (zonesLayer) {
-    zonesLayer.remove()
-  }
-
-  heatLayer = L.heatLayer(buildHeatPoints(records), {
-    radius: 28,
-    blur: 20,
-    maxZoom: 15,
-  }).addTo(map)
-
-  const features = zoneList
-    .map((zone) => {
-      const geometry = parseZoneGeometry(zone)
-      if (!geometry) return null
-      return {
-        type: 'Feature',
-        geometry,
-        properties: {
-          name: zone.name,
-          risk_level: zone.risk_level,
-        },
-      }
-    })
-    .filter(Boolean)
-
-  zonesLayer = L.geoJSON(features, {
-    style: (feature) => {
-      const riskLevel = feature?.properties?.risk_level ?? 'media'
-      return {
-        color: riskToColor(riskLevel),
-        weight: 2,
-        fillColor: riskToColor(riskLevel),
-        fillOpacity: riskToOpacity(riskLevel),
-      }
-    },
-    onEachFeature: (feature, layer) => {
-      const name = feature.properties?.name ?? 'Zona'
-      const risk = feature.properties?.risk_level ?? 'media'
-      layer.bindPopup(`<strong>${name}</strong><br/>Riesgo: ${risk}`)
-    },
-  }).addTo(map)
-
-  if (features.length > 0) {
-    const bounds = zonesLayer.getBounds()
-    if (bounds.isValid()) {
-      map.fitBounds(bounds.pad(0.15))
-    }
-  }
-}
-
-async function loadAllData() {
-  loading.value = true
-  errorMessage.value = ''
-
-  try {
-    const [accidentsResponse, zonesResponse, rainResponse] = await Promise.all([
-      fetchAccidents(hourFrom.value, hourTo.value),
-      fetchZones(),
-      fetchRainStatus(),
-    ])
-
-    accidents.value = accidentsResponse
-    zones.value = zonesResponse
-    rainStatus.value = rainResponse
-
-    await nextTick()
-    renderMap(accidents.value, zones.value)
-    renderChart(accidents.value)
-  } catch (error) {
-    errorMessage.value = 'No se pudo cargar la API de Medellín Movilidata OS. Verifica que Django esté activo en localhost:8000.'
-    console.error(error)
-  } finally {
-    loading.value = false
-  }
-}
-
-async function refreshAccidents() {
-  try {
-    const records = await fetchAccidents(hourFrom.value, hourTo.value)
-    accidents.value = records
-    renderMap(accidents.value, zones.value)
-    renderChart(accidents.value)
-  } catch (error) {
-    errorMessage.value = 'No se pudo actualizar el filtro horario.'
-    console.error(error)
-  }
-}
-
-async function handleRainToggle() {
-  loadingRain.value = true
-  errorMessage.value = ''
-
-  try {
-    rainStatus.value = await toggleRainStatus()
-  } catch (error) {
-    errorMessage.value = 'No se pudo cambiar el estado de lluvia simulada.'
-    console.error(error)
-  } finally {
-    loadingRain.value = false
-  }
-}
-
-watch([hourFrom, hourTo], () => {
-  normalizeRange()
-  refreshAccidents()
-})
-
-onMounted(loadAllData)
-
-onBeforeUnmount(() => {
-  chart?.destroy()
-  map?.remove()
-})
 </script>
 
 <template>
-  <main class="container-fluid py-4 py-lg-5 hero-shell">
-    <div class="row g-4 align-items-stretch">
-      <div class="col-12">
-        <div class="card soft-panel border-0">
-          <div class="card-body d-flex flex-column flex-lg-row align-items-lg-center justify-content-between gap-3">
-            <div>
-              <p class="kpi mb-2">HackData CTGI SENA 2026</p>
-              <h1 class="brand-title mb-1">Medellín Movilidata OS</h1>
-              <p class="mb-0 text-secondary">Dashboard PWA con Django REST, Vue 3, mapa de calor, filtro horario y alerta de lluvia simulada.</p>
-            </div>
-            <div class="d-flex flex-wrap gap-2">
-              <span class="badge rounded-pill text-bg-light px-3 py-2">{{ zoneCountLabel }}</span>
-              <span class="badge rounded-pill text-bg-light px-3 py-2">{{ accidentCountLabel }}</span>
-            </div>
+  <div class="dashboard-layout">
+    <header class="mobile-navbar shadow-sm d-flex d-lg-none">
+      <button class="btn border-0 p-0 text-dark" @click="toggleMobileSidebar" aria-label="Abrir menú de navegación">
+        <svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" fill="currentColor" viewBox="0 0 16 16">
+          <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5m0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5"/>
+        </svg>
+      </button>
+      <div class="d-flex align-items-center gap-2">
+        <img src="/assets/img/logo-placeholder.svg" alt="Medellín Movilidata Logo" width="34" height="34" />
+        <span class="brand-title m-0">Movilidata OS</span>
+      </div>
+      <div style="width: 26px;"></div>
+    </header>
+
+    <aside class="sidebar-panel" :class="{ 'show-mobile-sidebar': sidebarOpenMobile }">
+      <div class="sidebar-header d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center gap-2">
+          <img src="/assets/img/logo-placeholder.svg" alt="Medellín Movilidata Logo" width="40" height="40" />
+          <div>
+            <h5 class="brand-title m-0">Medellín</h5>
+            <span class="text-muted small fw-semibold">Movilidata OS</span>
           </div>
         </div>
+        <button class="btn btn-close d-lg-none shadow-none" @click="toggleMobileSidebar" aria-label="Cerrar menú"></button>
       </div>
 
-      <div class="col-12 col-xl-8">
-        <div class="card border-0 h-100">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-              <div>
-                <h2 class="h5 mb-1">Mapa de calor de siniestros</h2>
-                <p class="text-secondary mb-0">Zonas de Medellín con polígonos de riesgo y densidad de accidentes filtrada por hora.</p>
-              </div>
-              <div class="d-flex align-items-center gap-2">
-                <button class="btn btn-outline-primary btn-sm" type="button" :disabled="loadingRain" @click="handleRainToggle">
-                  {{ rainStatus.isRaining ? 'Quitar lluvia simulada' : 'Simular lluvia' }}
-                </button>
-                <span class="badge rounded-pill" :class="`badge-risk-${selectedZoneRisk}`">Zona Centro: {{ selectedZoneRisk }}</span>
-              </div>
-            </div>
+      <nav class="sidebar-body">
+        <ul class="nav-menu">
+          <li v-for="item in navItems" :key="item.id">
+            <a
+              class="nav-item-link"
+              :class="{ 'active-link': currentTab === item.id }"
+              @click.prevent="switchTab(item.id)"
+            >
+              <svg v-if="item.icon === 'house'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L2 8.207V13.5A1.5 1.5 0 0 0 3.5 15h9a1.5 1.5 0 0 0 1.5-1.5V8.207l.646.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293zM13 7.207V13.5a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5V7.207l5-5z"/></svg>
+              <svg v-if="item.icon === 'people'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M15 14s1 0 1-1-1-4-5-4-5 3-5 4 1 1 1 1zm-7.978-1L7 12.996c.001-.264.167-1.03.76-1.72C8.312 10.629 9.282 10 11 10c1.717 0 2.687.63 3.24 1.276.593.69.758 1.457.76 1.72l-.008.002-.014.002zM11 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4m3-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0M6.936 9.28a6 6 0 0 0-1.23-.247A7 7 0 0 0 5 9c-4 0-5 3-5 4q0 1 1 1h4.216A2.24 2.24 0 0 1 5 13c0-1.01.377-2.047 1.09-2.904.243-.294.526-.569.846-.816M4.92 7a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5M6 5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0"/></svg>
+              <svg v-if="item.icon === 'grid'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5zM2.5 2a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5zm6.5.5A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5zM1 10.5A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5zm6.5.5A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5z"/></svg>
+              <svg v-if="item.icon === 'envelope'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M0 4a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v.217l7 4.2 7-4.2V4a1 1 0 0 0-1-1zm13 2.383-4.708 2.825L15 11.105zm-.034 6.876-5.64-3.471L8 9.583l-1.326-.795-5.64 3.47A1 1 0 0 0 2 13h12a1 1 0 0 0 .966-.741M1 11.105l4.708-2.897L1 5.383z"/></svg>
+              <svg v-if="item.icon === 'broadcast'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M3.05 3.05a7 7 0 0 0 0 9.9.5.5 0 0 1-.707.707 8 8 0 0 1 0-11.314.5.5 0 0 1 .707.707m2.122 2.122a4 4 0 0 0 0 5.656.5.5 0 1 1-.708.708 5 5 0 0 1 0-7.072.5.5 0 0 1 .708.708m5.656-.708a.5.5 0 0 1 .708 0 5 5 0 0 1 0 7.072.5.5 0 1 1-.708-.708 4 4 0 0 0 0-5.656.5.5 0 0 1 0-.708m2.122-2.12a.5.5 0 0 1 .707 0 8 8 0 0 1 0 11.313.5.5 0 0 1-.707-.707 7 7 0 0 0 0-9.9.5.5 0 0 1 0-.707zM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0"/></svg>
+              <svg v-if="item.icon === 'lock'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2m3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2M5 8h6a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1"/></svg>
+              <span>{{ item.label }}</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
 
-            <div ref="mapContainer" class="map-container rounded-4 border"></div>
+      <footer class="sidebar-footer">
+        <div class="d-flex align-items-center justify-content-between">
+          <span class="text-secondary small fw-medium">SENA CTGI</span>
+          <span class="badge bg-light text-primary border">v1.1.0</span>
+        </div>
+      </footer>
+    </aside>
 
-            <div class="mt-3 d-flex flex-wrap gap-3 text-secondary small">
-              <span>Filtro actual: {{ hourFrom }}:00 - {{ hourTo }}:00</span>
-              <span>Estado lluvia: {{ rainStatus.isRaining ? 'Activa' : 'Inactiva' }}</span>
-            </div>
-          </div>
+    <main class="main-content-panel">
+      <div class="content-heading d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <div>
+          <p class="kpi mb-2">Sección activa</p>
+          <h1 class="brand-title mb-0">{{ currentTitle }}</h1>
         </div>
       </div>
+      <KeepAlive>
+        <component :is="views[currentTab]" />
+      </KeepAlive>
+    </main>
 
-      <div class="col-12 col-xl-4">
-        <div class="card border-0 h-100">
-          <div class="card-body d-flex flex-column gap-3">
-            <div>
-              <h2 class="h5 mb-1">Alerta de rutas inseguras</h2>
-              <p class="text-secondary mb-0">La lógica base usa la zona Centro y la lluvia simulada para producir la advertencia.</p>
-            </div>
-
-            <div class="alert mb-0" :class="alertClass" role="alert">
-              {{ alertMessage }}
-            </div>
-
-            <div class="bg-light rounded-4 p-3">
-              <p class="mb-1 text-secondary small">Zona predefinida</p>
-              <p class="mb-0 fw-semibold">{{ selectedZone?.name ?? 'Centro' }}</p>
-              <p class="mb-0 text-secondary">Riesgo: {{ selectedZoneRisk }}</p>
-            </div>
-
-            <div class="bg-light rounded-4 p-3">
-              <p class="mb-1 text-secondary small">Filtro horario</p>
-              <label class="form-label mb-1" for="hourFrom">Desde {{ hourFrom }}:00</label>
-              <input id="hourFrom" v-model="hourFrom" type="range" class="form-range" min="0" max="23" step="1" />
-              <label class="form-label mb-1 mt-2" for="hourTo">Hasta {{ hourTo }}:00</label>
-              <input id="hourTo" v-model="hourTo" type="range" class="form-range" min="0" max="23" step="1" />
-            </div>
-
-            <div class="small text-secondary">
-              {{ errorMessage || 'La app consulta directamente la API de Django en http://localhost:8000.' }}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div class="col-12">
-        <div class="card border-0">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-              <div>
-                <h2 class="h5 mb-1">Tendencia horaria</h2>
-                <p class="text-secondary mb-0">Conteo de accidentes y acumulado de intensidad en el horario seleccionado.</p>
-              </div>
-              <span class="badge text-bg-primary px-3 py-2">{{ loading ? 'Cargando datos...' : 'Actualizado desde API' }}</span>
-            </div>
-            <div style="height: 320px">
-              <canvas ref="chartCanvas" aria-label="Gráfico de accidentes por hora"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </main>
+    <div v-if="sidebarOpenMobile" class="mobile-backdrop d-lg-none" @click="toggleMobileSidebar"></div>
+  </div>
 </template>
+
+<style scoped>
+.mobile-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(30, 42, 53, 0.4);
+  backdrop-filter: blur(4px);
+  z-index: 98;
+}
+
+@media (max-width: 991.98px) {
+  .mobile-backdrop {
+    display: block;
+  }
+}
+</style>

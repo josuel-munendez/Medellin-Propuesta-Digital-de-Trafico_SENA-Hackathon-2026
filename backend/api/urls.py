@@ -1,10 +1,39 @@
 from django.urls import path
 
-from .views import AccidentListView, WeatherSimView, WeatherStatusView, ZonesListView
+from .views import (
+    AccidentListView,
+    AdminAccidentDetailView,
+    AdminAccidentListView,
+    AdminUserDetailView,
+    AdminUserListView,
+    AdminZoneDetailView,
+    AdminZoneListView,
+    CongestionPredictionView,
+    DashboardView,
+    LoginView,
+    LogoutView,
+    MeView,
+    WeatherSimView,
+    WeatherStatusView,
+    ZonesListView,
+    api_root,
+)
 
 urlpatterns = [
+    path('', api_root, name='api-root'),
+    path('auth/login/', LoginView.as_view(), name='auth-login'),
+    path('auth/logout/', LogoutView.as_view(), name='auth-logout'),
+    path('auth/me/', MeView.as_view(), name='auth-me'),
+    path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('admin/accidents/', AdminAccidentListView.as_view(), name='admin-accident-list'),
+    path('admin/accidents/<int:pk>/', AdminAccidentDetailView.as_view(), name='admin-accident-detail'),
+    path('admin/zones/', AdminZoneListView.as_view(), name='admin-zone-list'),
+    path('admin/zones/<int:pk>/', AdminZoneDetailView.as_view(), name='admin-zone-detail'),
+    path('admin/users/', AdminUserListView.as_view(), name='admin-user-list'),
+    path('admin/users/<int:pk>/', AdminUserDetailView.as_view(), name='admin-user-detail'),
     path('accidents/', AccidentListView.as_view(), name='accident-list'),
     path('zones/', ZonesListView.as_view(), name='zone-list'),
     path('weather/', WeatherStatusView.as_view(), name='weather-status'),
+    path('congestion_prediction/', CongestionPredictionView.as_view(), name='congestion-prediction'),
     path('simulate_rain/', WeatherSimView.as_view(), name='simulate-rain'),
 ]
