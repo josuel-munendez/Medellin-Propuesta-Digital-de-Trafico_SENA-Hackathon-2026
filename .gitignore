@@ -26,3 +26,6 @@ frontend/dist
 *.njsproj
 *.sln
 *.sw?
+
+.version_proyecto_compañero/
+.version_proyecto_compañero/*
