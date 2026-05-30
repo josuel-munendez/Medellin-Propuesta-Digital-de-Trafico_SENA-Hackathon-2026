@@ -1,23 +1,14 @@
-# Medellín Movilidata OS
+# Urbanlytics
 
-Aplicación web front-end (hackathon HackData CTGI SENA 2026) para visualizar siniestralidad, congestión y alertas climáticas de movilidad en Medellín.
-
-## Objetivo
-Reducir riesgos de movilidad urbana mediante:
-- Identificación de puntos críticos de accidentes.
-- Lectura de tendencias horarias de accidentalidad y congestión.
-- Alertas de seguridad en escenarios de lluvia.
+Urbanlytics es un MVP full stack para analizar riesgo vial en Medellín. Integra Django REST, SQLite en desarrollo, Vue 3, Leaflet, Chart.js, Bootstrap 5 y PWA para mostrar accidentes, zonas de riesgo, clima y pronóstico simple de congestión.
 
 ## Tecnologías
 - Vue 3 + Vite
 - Bootstrap 5
-- Mapbox GL JS
 - Leaflet + leaflet.heat
 - Chart.js
-- TomTom Traffic API
-- SIATA
 - PWA con vite-plugin-pwa
-- Datos estáticos JSON para siniestralidad y vías base
+- Datos estáticos JSON (sin backend)
 
 ## Estructura principal
 - `src/main.js`, `src/App.vue`
@@ -33,11 +24,10 @@ Reducir riesgos de movilidad urbana mediante:
 
 ## Instalación y ejecución
 ```bash
-npm install
-npm run dev
+export OPENWEATHER_API_KEY=tu_api_key_opcional
 ```
 
-## Build de producción
+Cuando se migre a MySQL, activa:
 ```bash
 npm run build
 npm run preview
@@ -48,38 +38,19 @@ La aplicación incluye:
 - `manifest.json` generado por Vite PWA
 - Service Worker con fallback a `offline.html`
 
-## Clima SIATA
-El clima y pronóstico local se consulta desde datos públicos de SIATA. Si el servidor no responde
-o el navegador bloquea la solicitud, la app muestra un respaldo local para que el panel no se rompa.
-
-## TomTom Traffic
-Para habilitar tráfico en vivo e incidentes viales:
+## Clima en vivo (opcional)
+Para usar OpenWeatherMap, crea un archivo `.env`:
 ```bash
-VITE_TOMTOM_API_KEY=tu_api_key
+VITE_OPENWEATHER_API_KEY=tu_api_key
 ```
-Con esa clave la app consulta:
-- `flowSegmentData` para velocidad y congestión.
-- `incidentDetails` para accidentes y cierres dentro del área de Medellín.
-
-## Mapbox
-Para usar los estilos oficiales e interacción de Mapbox GL JS:
-```bash
-VITE_MAPBOX_ACCESS_TOKEN=tu_token_publico
-```
-
-Si no hay token, la app mantiene el mapa visible con teselas OSM dentro de Mapbox GL JS.
-
-Fuentes SIATA usadas:
-- `https://siata.gov.co/data/scroll/temperatura2.json`
-- `https://siata.gov.co/data/scroll/pronosticoPPT.json`
+Si no hay API key, se muestra clima simulado para demo.
 
 ## Datos reales de Medellín
 Reemplaza los archivos:
 - `public/assets/data/accidents.json`
-- `public/assets/data/medellin-roads.json`
+- `public/assets/data/traffic.json`
 
-La capa de tráfico e incidentes en vivo ahora sale directamente de TomTom, así que solo necesitas
-mantener las coordenadas base y configurar `VITE_TOMTOM_API_KEY`.
+Mantén el mismo formato de claves para no romper el dashboard.
 
 ## Despliegue
 ### Netlify
@@ -92,12 +63,14 @@ mantener las coordenadas base y configurar `VITE_TOMTOM_API_KEY`.
 2. Publica la carpeta `dist` con la estrategia que uses en tu flujo CI/CD.
 
 ## Capturas
-Agregar imágenes en `screenshots/` y enlazarlas aquí.
+Agrega evidencias de la demo en `screenshots/`: dashboard, heatmap, filtro horario, alerta por lluvia, PWA instalada y rastreo en vivo.
 
-## Video demo
-Agregar enlace del video demo aquí: **[pendiente]**
+## Integrantes
+- Equipo Urbanlytics SENA Hackathon 2026.
 
-## Equipo (placeholder)
-- Rol 1: Pendiente
-- Rol 2: Pendiente
-- Rol 3: Pendiente
+## Escalabilidad futura
+- Migrar a PostgreSQL/PostGIS para consultas geoespaciales reales.
+- Añadir Redis para cachear clima, zonas y consultas frecuentes.
+- Separar predicciones en microservicio con colas para entrenamiento offline.
+- Usar Celery para ingesta periódica de clima/tráfico.
+- Desplegar backend y frontend detrás de Nginx con variables de entorno por ambiente.
