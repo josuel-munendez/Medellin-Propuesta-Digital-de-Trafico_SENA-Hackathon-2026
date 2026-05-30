@@ -8,6 +8,7 @@ import Servicios from './components/Servicios.vue'
 import Contacto from './components/Contacto.vue'
 import Login from './components/Login.vue'
 import RealtimeTracker from './components/RealtimeTracker.vue'
+import AccidentReporter from './components/AccidentReporter.vue'
 
 const currentTab = ref('inicio')
 const sidebarOpenMobile = ref(false)
@@ -19,6 +20,7 @@ const views = {
   contacto: Contacto,
   login: Login,
   rastreo: RealtimeTracker,
+  accidentes: AccidentReporter,
 }
 
 const navItems = [
@@ -27,6 +29,7 @@ const navItems = [
   { id: 'servicios', label: 'Servicios', icon: 'grid' },
   { id: 'contacto', label: 'Contacto', icon: 'envelope' },
   { id: 'rastreo', label: 'Rastreo en Vivo', icon: 'broadcast' },
+  { id: 'accidentes', label: 'Accidentes', icon: 'triangle' },
   { id: 'login', label: 'Acceso Admin', icon: 'lock' },
 ]
 
@@ -104,6 +107,10 @@ function toggleMobileSidebar() {
               <!-- Lock Icon -->
               <svg v-if="item.icon === 'lock'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
                 <path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2m3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2M5 8h6a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1"/>
+              </svg>
+              <!-- Warning Triangle Icon -->
+              <svg v-if="item.icon === 'triangle'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M8.427 1.427a1.5 1.5 0 0 0-2.854 0l-6.1 12.2A1.5 1.5 0 0 0 1.818 15h12.364a1.5 1.5 0 0 0 1.345-2.173zM7.002 6a1 1 0 1 1 2 0l-.25 3.5a.75.75 0 0 1-1.5 0zM8 12a1.125 1.125 0 1 1 0-2.25A1.125 1.125 0 0 1 8 12"/>
               </svg>
               <span>{{ item.label }}</span>
             </a>

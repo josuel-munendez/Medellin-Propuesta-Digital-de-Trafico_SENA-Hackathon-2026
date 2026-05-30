@@ -42,7 +42,7 @@ export function getTrafficLevel(currentSpeed, freeFlowSpeed) {
  */
 export async function fetchTrafficSegment(lat, lng, apiKey) {
   try {
-    const url = `${TOMTOM_BASE_URL}?key=${apiKey}&point=${lat},${lng}&unit=KMPH`
+    const url = `${TOMTOM_BASE_URL}?key=${apiKey}&point=${lat},${lng}&unit=kmph`
     const response = await fetch(url)
     
     if (!response.ok) {

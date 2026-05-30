@@ -1,7 +1,8 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, reactive } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import L from 'leaflet'
-import { fetchMultipleSegments, getTrafficColor } from '../assets/js/trafficFlow.js'
+import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
+import { getConfiguredEnv } from '../utils/env.js'
 
 // ─── Estado de la UI ──────────────────────────────────────────────────────────
 const mapContainer = ref(null)
@@ -9,12 +10,16 @@ const gpsActive = ref(false)
 const gpsStatus = ref('idle')   // 'idle' | 'searching' | 'active' | 'denied' | 'unsupported'
 const gpsAccuracy = ref(null)
 const connectedUnits = ref(0)
+const trafficLayerVisible = ref(true)
+const incidentsLayerVisible = ref(true)
 
 // ─── Mapa y recursos de Leaflet ───────────────────────────────────────────────
 let map = null
 let ownMarker = null
 let watchId = null
 const vehicleMarkers = {}
+let trafficLayerGroup = null
+let incidentsLayerGroup = null
 
 // ─── Rutas simuladas de vehículos en Medellín ────────────────────────────────
 // Coordenadas reales de vías principales: El Poblado, Centro, Laureles, Robledo, Bello.
@@ -81,12 +86,20 @@ const vehicleRouteIndex = {}
 let vehicleSimInterval = null
 
 // ─── Estado de la capa de tráfico en tiempo real ──────────────────────────────
-const trafficLayerVisible = ref(true)
-const trafficSegments = ref([])
-let trafficLayerGroup = null
-const trafficLoading = ref(false)
-const lastTrafficUpdate = ref(null)
+const {
+  trafficSegments,
+  trafficIncidents,
+  trafficLoading,
+  incidentsLoading,
+  trafficError,
+  incidentsError,
+  lastTrafficUpdate,
+  lastIncidentsUpdate,
+  loadTrafficSegments,
+  loadTrafficIncidents,
+} = useTomTomTraffic()
 let trafficRefreshInterval = null
+let incidentsRefreshInterval = null
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function createVehicleIcon(color, emoji) {
@@ -156,6 +169,96 @@ function initMap() {
 
     vehicleRouteIndex[route.id] = 0
   })
+}
+
+function renderTrafficLayer() {
+  if (!map) return
+
+  if (trafficLayerGroup) {
+    map.removeLayer(trafficLayerGroup)
+  }
+
+  trafficLayerGroup = L.layerGroup()
+
+  trafficSegments.value.forEach((segment) => {
+    if (!segment || !segment.coordinates || segment.coordinates.length < 2) return
+
+    const polyline = L.polyline(segment.coordinates, {
+      color: segment.color,
+      weight: segment.congestionPct >= 85 ? 7 : segment.congestionPct >= 70 ? 6 : 5,
+      opacity: 0.9,
+    })
+
+    const congestionPct = Math.round((1 - segment.ratio) * 100)
+    polyline.bindPopup(`
+      <div style="font-family:'Inter',sans-serif;min-width:180px">
+        <strong style="display:block;margin-bottom:4px">🛣️ ${segment.name || 'Vía sin nombre'}</strong>
+        <span style="font-size:12px;color:#64748b">Velocidad actual: <strong>${segment.currentSpeed} km/h</strong></span><br/>
+        <span style="font-size:12px;color:#64748b">Velocidad libre: <strong>${segment.freeFlowSpeed} km/h</strong></span><br/>
+        <span style="font-size:12px;color:#64748b">Congestión: <strong>${congestionPct}%</strong></span>
+      </div>
+    `)
+
+    trafficLayerGroup.addLayer(polyline)
+  })
+
+  if (trafficLayerVisible.value && map) {
+    trafficLayerGroup.addTo(map)
+  }
+}
+
+function renderIncidentsLayer() {
+  if (!map) return
+
+  if (incidentsLayerGroup) {
+    map.removeLayer(incidentsLayerGroup)
+  }
+
+  incidentsLayerGroup = L.layerGroup()
+
+  trafficIncidents.value.forEach((incident) => {
+    const geometry = normalizeIncidentGeometry(incident?.geometry)
+    if (!geometry) return
+
+    const color = getIncidentColor(incident?.properties?.iconCategory || incident?.type)
+    const label = getIncidentLabel(incident)
+
+    if (geometry.length === 1) {
+      L.circleMarker(geometry[0], {
+        radius: 7,
+        color: '#ffffff',
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.9,
+      })
+        .bindPopup(`
+          <div style="font-family:'Inter',sans-serif;min-width:180px">
+            <strong style="display:block;margin-bottom:4px">⚠️ ${label}</strong>
+            <span style="font-size:12px;color:#64748b">Incidente TomTom activo</span>
+          </div>
+        `)
+        .addTo(incidentsLayerGroup)
+      return
+    }
+
+    L.polyline(geometry, {
+      color,
+      weight: 6,
+      opacity: 0.8,
+      dashArray: '4, 6',
+    })
+      .bindPopup(`
+        <div style="font-family:'Inter',sans-serif;min-width:180px">
+          <strong style="display:block;margin-bottom:4px">⚠️ ${label}</strong>
+          <span style="font-size:12px;color:#64748b">Incidente lineal TomTom</span>
+        </div>
+      `)
+      .addTo(incidentsLayerGroup)
+  })
+
+  if (incidentsLayerVisible.value && map) {
+    incidentsLayerGroup.addTo(map)
+  }
 }
 
 // ─── Simulación de vehículos (adaptado de Realtime_Tracker) ──────────────────
@@ -261,60 +364,35 @@ function toggleGPS() {
 
 // ─── Capa de Tráfico en Tiempo Real ──────────────────────────────────────────
 async function loadTrafficData() {
-  trafficLoading.value = true
   try {
     const roadsRes = await fetch('/assets/data/medellin-roads.json')
     const roads = await roadsRes.json()
 
-    const apiKey = import.meta.env.VITE_TOMTOM_API_KEY
+    const apiKey = getConfiguredEnv('VITE_TOMTOM_API_KEY')
     if (!apiKey) {
       console.warn('[RealtimeTracker] VITE_TOMTOM_API_KEY no configurada — capa de tráfico deshabilitada')
-      trafficLoading.value = false
       return
     }
 
-    const results = await fetchMultipleSegments(roads, apiKey)
-    trafficSegments.value = results.filter(Boolean)
-
-    // Limpiar capa anterior
-    if (trafficLayerGroup) {
-      map?.removeLayer(trafficLayerGroup)
-    }
-
-    trafficLayerGroup = L.layerGroup()
-
-    trafficSegments.value.forEach((segment) => {
-      if (!segment || !segment.coordinates || segment.coordinates.length < 2) return
-
-      const polyline = L.polyline(segment.coordinates, {
-        color: segment.color,
-        weight: 5,
-        opacity: 0.8,
-      })
-
-      const congestionPct = Math.round((1 - segment.ratio) * 100)
-      polyline.bindPopup(`
-        <div style="font-family:'Inter',sans-serif;min-width:180px">
-          <strong style="display:block;margin-bottom:4px">🛣️ ${segment.name || 'Vía sin nombre'}</strong>
-          <span style="font-size:12px;color:#64748b">Velocidad actual: <strong>${segment.currentSpeed} km/h</strong></span><br/>
-          <span style="font-size:12px;color:#64748b">Velocidad libre: <strong>${segment.freeFlowSpeed} km/h</strong></span><br/>
-          <span style="font-size:12px;color:#64748b">Congestión: <strong>${congestionPct}%</strong></span>
-        </div>
-      `)
-
-      trafficLayerGroup.addLayer(polyline)
-    })
-
-    if (trafficLayerVisible.value && map) {
-      trafficLayerGroup.addTo(map)
-    }
-
-    const now = new Date()
-    lastTrafficUpdate.value = now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    await loadTrafficSegments(roads, apiKey)
+    renderTrafficLayer()
   } catch (err) {
     console.warn('[RealtimeTracker] Error cargando datos de tráfico:', err)
-  } finally {
-    trafficLoading.value = false
+  }
+}
+
+async function loadTrafficIncidentsData() {
+  try {
+    const apiKey = getConfiguredEnv('VITE_TOMTOM_API_KEY')
+    if (!apiKey) {
+      console.warn('[RealtimeTracker] VITE_TOMTOM_API_KEY no configurada — capa de incidentes deshabilitada')
+      return
+    }
+
+    await loadTrafficIncidents(apiKey)
+    renderIncidentsLayer()
+  } catch (err) {
+    console.warn('[RealtimeTracker] Error cargando incidentes TomTom:', err)
   }
 }
 
@@ -327,18 +405,33 @@ function toggleTrafficLayer() {
   }
 }
 
+function toggleIncidentsLayer() {
+  incidentsLayerVisible.value = !incidentsLayerVisible.value
+  if (incidentsLayerVisible.value && incidentsLayerGroup && map) {
+    incidentsLayerGroup.addTo(map)
+  } else if (!incidentsLayerVisible.value && incidentsLayerGroup && map) {
+    map.removeLayer(incidentsLayerGroup)
+  }
+}
+
 // ─── Ciclo de vida ────────────────────────────────────────────────────────────
 onMounted(() => {
   initMap()
   startVehicleSimulation()
   loadTrafficData()
+  loadTrafficIncidentsData()
   trafficRefreshInterval = setInterval(loadTrafficData, 120000)
+  incidentsRefreshInterval = setInterval(loadTrafficIncidentsData, 600000)
 })
 
 onBeforeUnmount(() => {
   if (trafficRefreshInterval) {
     clearInterval(trafficRefreshInterval)
     trafficRefreshInterval = null
+  }
+  if (incidentsRefreshInterval) {
+    clearInterval(incidentsRefreshInterval)
+    incidentsRefreshInterval = null
   }
   stopGPS()
   stopVehicleSimulation()
@@ -417,10 +510,17 @@ onBeforeUnmount(() => {
                 <button @click="toggleTrafficLayer" class="btn btn-sm" :class="trafficLayerVisible ? 'btn-success' : 'btn-outline-secondary'">
                   <i class="bi bi-signpost-split"></i> Tráfico en Tiempo Real
                 </button>
+                <button @click="toggleIncidentsLayer" class="btn btn-sm" :class="incidentsLayerVisible ? 'btn-danger' : 'btn-outline-secondary'">
+                  <i class="bi bi-exclamation-triangle"></i> Incidentes TomTom
+                </button>
                 <span v-if="trafficLoading" class="badge bg-warning text-dark ms-2">
                   <span class="spinner-border spinner-border-sm"></span> Cargando tráfico...
                 </span>
-                <small v-if="lastTrafficUpdate" class="text-muted ms-2">Actualizado: {{ lastTrafficUpdate }}</small>
+                <span v-if="incidentsLoading" class="badge bg-info text-dark ms-2">
+                  <span class="spinner-border spinner-border-sm"></span> Cargando incidentes...
+                </span>
+                <small v-if="lastTrafficUpdate" class="text-muted ms-2">Actualizado: {{ new Date(lastTrafficUpdate).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) }}</small>
+                <small v-if="lastIncidentsUpdate" class="text-muted ms-2">Incidentes: {{ new Date(lastIncidentsUpdate).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) }}</small>
                 <button
                   @click="toggleGPS"
                   class="btn btn-sm rounded-pill px-3 shadow-sm"
@@ -432,6 +532,10 @@ onBeforeUnmount(() => {
                 </button>
               </div>
             </div>
+            <div v-if="trafficError || incidentsError" class="mt-3">
+              <div v-if="trafficError" class="alert alert-warning py-2 small mb-2 border-0">{{ trafficError }}</div>
+              <div v-if="incidentsError" class="alert alert-warning py-2 small mb-0 border-0">{{ incidentsError }}</div>
+            </div>
             <div class="position-relative">
               <div ref="mapContainer" class="tracker-map rounded border"></div>
               <div v-if="trafficLayerVisible" class="traffic-legend">
@@ -439,6 +543,11 @@ onBeforeUnmount(() => {
                 <div class="legend-item"><span class="legend-color" style="background:#22c55e"></span> Fluido</div>
                 <div class="legend-item"><span class="legend-color" style="background:#eab308"></span> Moderado</div>
                 <div class="legend-item"><span class="legend-color" style="background:#ef4444"></span> Congestionado</div>
+              </div>
+              <div v-if="incidentsLayerVisible" class="incident-legend">
+                <div class="legend-title">Incidentes</div>
+                <div class="legend-item"><span class="legend-color" style="background:#dc2626"></span> Accidentes</div>
+                <div class="legend-item"><span class="legend-color" style="background:#f97316"></span> Cierres / bloqueos</div>
               </div>
             </div>
           </div>
@@ -593,6 +702,18 @@ onBeforeUnmount(() => {
   position: absolute;
   bottom: 20px;
   left: 20px;
+  background: rgba(255,255,255,0.95);
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  z-index: 1000;
+  font-size: 0.8rem;
+}
+
+.incident-legend {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
   background: rgba(255,255,255,0.95);
   border-radius: 8px;
   padding: 10px 14px;

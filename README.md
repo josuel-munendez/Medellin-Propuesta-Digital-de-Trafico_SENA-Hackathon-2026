@@ -11,10 +11,13 @@ Reducir riesgos de movilidad urbana mediante:
 ## Tecnologías
 - Vue 3 + Vite
 - Bootstrap 5
+- Mapbox GL JS
 - Leaflet + leaflet.heat
 - Chart.js
+- TomTom Traffic API
+- SIATA
 - PWA con vite-plugin-pwa
-- Datos estáticos JSON (sin backend)
+- Datos estáticos JSON para siniestralidad y vías base
 
 ## Estructura principal
 - `src/main.js`, `src/App.vue`
@@ -45,19 +48,38 @@ La aplicación incluye:
 - `manifest.json` generado por Vite PWA
 - Service Worker con fallback a `offline.html`
 
-## Clima en vivo (opcional)
-Para usar OpenWeatherMap, crea un archivo `.env`:
+## Clima SIATA
+El clima y pronóstico local se consulta desde datos públicos de SIATA. Si el servidor no responde
+o el navegador bloquea la solicitud, la app muestra un respaldo local para que el panel no se rompa.
+
+## TomTom Traffic
+Para habilitar tráfico en vivo e incidentes viales:
 ```bash
-VITE_OPENWEATHER_API_KEY=tu_api_key
+VITE_TOMTOM_API_KEY=tu_api_key
 ```
-Si no hay API key, se muestra clima simulado para demo.
+Con esa clave la app consulta:
+- `flowSegmentData` para velocidad y congestión.
+- `incidentDetails` para accidentes y cierres dentro del área de Medellín.
+
+## Mapbox
+Para usar los estilos oficiales e interacción de Mapbox GL JS:
+```bash
+VITE_MAPBOX_ACCESS_TOKEN=tu_token_publico
+```
+
+Si no hay token, la app mantiene el mapa visible con teselas OSM dentro de Mapbox GL JS.
+
+Fuentes SIATA usadas:
+- `https://siata.gov.co/data/scroll/temperatura2.json`
+- `https://siata.gov.co/data/scroll/pronosticoPPT.json`
 
 ## Datos reales de Medellín
 Reemplaza los archivos:
 - `public/assets/data/accidents.json`
-- `public/assets/data/traffic.json`
+- `public/assets/data/medellin-roads.json`
 
-Mantén el mismo formato de claves para no romper el dashboard.
+La capa de tráfico e incidentes en vivo ahora sale directamente de TomTom, así que solo necesitas
+mantener las coordenadas base y configurar `VITE_TOMTOM_API_KEY`.
 
 ## Despliegue
 ### Netlify
