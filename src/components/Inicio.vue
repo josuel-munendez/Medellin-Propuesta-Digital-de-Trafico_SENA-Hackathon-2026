@@ -1,19 +1,42 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import L from 'leaflet'
-import 'leaflet.heat'
-import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend } from 'chart.js'
+import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler } from 'chart.js'
 import { getWeatherData } from '../assets/js/weather'
+import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
+import { getConfiguredEnv } from '../utils/env.js'
+import { fetchZones, fetchCongestionPrediction } from '../services/api.js'
 
-Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend)
+Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const mapContainer = ref(null)
 const chartCanvas = ref(null)
 const weather = ref(null)
 const loading = ref(true)
+const mapError = ref('')
+const zones = ref([])
+const zonesError = ref('')
+const prediction = ref(null)
+const predictionError = ref('')
+const apiConnected = ref(false)
+const {
+  trafficSegments,
+  trafficIncidents,
+  trafficLoading,
+  incidentsLoading,
+  trafficError,
+  incidentsError,
+  loadTrafficSegments,
+  loadTrafficIncidents,
+} = useTomTomTraffic()
 
 let map
 let chart
+let mapLoaded = false
+let leaflet = null
+let heatLayerInstance = null
+let zonesLayerGroup = null
+let trafficLayerGroup = null
+let incidentsLayerGroup = null
 
 const alertMessage = computed(() => {
   if (!weather.value) return 'Cargando estado climático...'
@@ -23,6 +46,33 @@ const alertMessage = computed(() => {
 })
 
 const alertClass = computed(() => (weather.value?.rainAlert ? 'alert-danger shadow-sm border-0 border-start border-danger border-4' : 'alert-success shadow-sm border-0 border-start border-success border-4'))
+
+const trafficSummary = computed(() => {
+  const segments = trafficSegments.value
+  if (!segments.length) {
+    return {
+      average: 0,
+      fluid: 0,
+      moderate: 0,
+      heavy: 0,
+    }
+  }
+
+  const percentages = segments.map((segment) => segment.congestionPct)
+  const average = Math.round(percentages.reduce((sum, value) => sum + value, 0) / percentages.length)
+
+  return {
+    average,
+    fluid: percentages.filter((value) => value < 35).length,
+    moderate: percentages.filter((value) => value >= 35 && value < 70).length,
+    heavy: percentages.filter((value) => value >= 70).length,
+  }
+})
+
+const incidentSummary = computed(() => ({
+  total: trafficIncidents.value.length,
+  accidents: trafficIncidents.value.filter((incident) => String(incident?.properties?.iconCategory || '').toLowerCase().includes('accident')).length,
+}))
 
 function buildHourlySeries(accidents) {
   const buckets = Array.from({ length: 24 }, () => 0)
@@ -36,37 +86,277 @@ function buildHourlySeries(accidents) {
   return buckets
 }
 
+function buildAccidentGeoJson(accidents) {
+  return {
+    type: 'FeatureCollection',
+    features: accidents
+      .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng))
+      .map((item) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [item.lng, item.lat],
+        },
+        properties: {
+          intensity: item.intensity ?? 0.5,
+          hour: item.hour ?? null,
+        },
+      })),
+  }
+}
+
+function buildTrafficGeoJson() {
+  return {
+    type: 'FeatureCollection',
+    features: trafficSegments.value
+      .filter((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1)
+      .map((segment) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: segment.coordinates.map(([lat, lng]) => [lng, lat]),
+        },
+        properties: {
+          name: segment.name || 'Vía TomTom',
+          color: segment.color,
+          congestionPct: segment.congestionPct,
+          currentSpeed: segment.currentSpeed,
+          freeFlowSpeed: segment.freeFlowSpeed,
+        },
+      })),
+  }
+}
+
+function buildIncidentGeoJson() {
+  return {
+    type: 'FeatureCollection',
+    features: trafficIncidents.value
+      .map((incident) => {
+        const geometry = normalizeIncidentGeometry(incident?.geometry)
+        if (!geometry) return null
+
+        const isPoint = geometry.length === 1
+        return {
+          type: 'Feature',
+          geometry: {
+            type: isPoint ? 'Point' : 'LineString',
+            coordinates: isPoint
+              ? [geometry[0][1], geometry[0][0]]
+              : geometry.map(([lat, lng]) => [lng, lat]),
+          },
+          properties: {
+            label: getIncidentLabel(incident),
+            color: getIncidentColor(incident?.properties?.iconCategory || incident?.type),
+          },
+        }
+      })
+      .filter(Boolean),
+  }
+}
+
+async function initLeafletMap(accidents) {
+  if (!leaflet) {
+    try {
+      const [L, heat] = await Promise.all([
+        import('leaflet'),
+        import('leaflet.heat'),
+      ])
+      leaflet = L
+      if (typeof heat.default === 'function') {
+        heat.default(L)
+      }
+    } catch (importErr) {
+      console.warn('[Inicio] Leaflet import failed:', importErr?.message || importErr)
+      throw new Error('Leaflet could not be loaded')
+    }
+  }
+
+  if (!leaflet || !mapContainer.value) {
+    throw new Error('Leaflet or container not available')
+  }
+
+  map = leaflet.map(mapContainer.value, {
+    center: [6.25184, -75.56359],
+    zoom: 12,
+    zoomControl: true,
+  })
+
+  leaflet
+    .tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: 'OpenStreetMap contributors',
+      maxZoom: 19,
+    })
+    .addTo(map)
+
+  map.on('load', () => {
+    mapLoaded = true
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
+  })
+
+  // Leaflet fires 'load' synchronously when map is created, trigger layers after next tick
+  setTimeout(() => {
+    mapLoaded = true
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
+  }, 200)
+}
+
+function addAccidentHeatLayer(accidentData) {
+  if (!mapLoaded || heatLayerInstance) return
+
+  const points = accidentData.features.map((f) => {
+    const intensity = f.properties?.intensity ?? 0.5
+    return [f.geometry.coordinates[1], f.geometry.coordinates[0], intensity]
+  })
+
+  if (points.length && leaflet.heatLayer) {
+    heatLayerInstance = leaflet
+      .heatLayer(points, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 15,
+        max: 1.0,
+        gradient: { 0: '#16a34a', 0.3: '#22c55e', 0.55: '#eab308', 0.78: '#f97316', 1: '#dc2626' },
+      })
+      .addTo(map)
+  }
+}
+
+function addZonesGeoLayer() {
+  if (!mapLoaded || !zones.value.length || zonesLayerGroup) return
+
+  const riskColors = { alta: '#dc2626', media: '#eab308', baja: '#22c55e' }
+
+  const features = zones.value
+    .filter((z) => {
+      try {
+        const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+        return geom && geom.type && geom.coordinates
+      } catch { return false }
+    })
+    .map((z) => {
+      const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+      return {
+        type: 'Feature',
+        geometry: geom,
+        properties: { name: z.name, risk_level: z.risk_level },
+      }
+    })
+
+  if (!features.length) return
+
+  zonesLayerGroup = leaflet
+    .geoJSON(
+      { type: 'FeatureCollection', features },
+      {
+        style: (feature) => ({
+          color: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillColor: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillOpacity: 0.12,
+          weight: 2,
+          opacity: 0.6,
+        }),
+        onEachFeature: (feature, layer) => {
+          if (feature.properties?.name) {
+            layer.bindTooltip(feature.properties.name, {
+              permanent: true,
+              direction: 'center',
+              className: 'zone-label',
+            })
+          }
+        },
+      },
+    )
+    .addTo(map)
+}
+
+function renderTrafficLayers() {
+  if (!mapLoaded) return
+
+  const trafficData = buildTrafficGeoJson()
+  const incidentData = buildIncidentGeoJson()
+
+  if (trafficLayerGroup) {
+    trafficLayerGroup.remove()
+  }
+  trafficLayerGroup = leaflet
+    .geoJSON(trafficData, {
+      style: (feature) => ({
+        color: feature.properties?.color || '#22c55e',
+        weight: Math.max(3, (feature.properties?.congestionPct || 0) / 20),
+        opacity: 0.9,
+      }),
+    })
+    .addTo(map)
+
+  if (incidentsLayerGroup) {
+    incidentsLayerGroup.remove()
+  }
+  incidentsLayerGroup = leaflet
+    .geoJSON(incidentData, {
+      pointToLayer: (feature, latlng) =>
+        leaflet.circleMarker(latlng, {
+          radius: 7,
+          fillColor: feature.properties?.color || '#eab308',
+          color: '#ffffff',
+          weight: 2,
+          fillOpacity: 1,
+        }),
+      style: (feature) => {
+        if (feature.geometry?.type === 'LineString') {
+          return {
+            color: feature.properties?.color || '#eab308',
+            weight: 5,
+            dashArray: '6,3',
+            opacity: 0.9,
+          }
+        }
+        return {}
+      },
+      onEachFeature: (feature, layer) => {
+        if (feature.properties?.label) {
+          layer.bindPopup(feature.properties.label)
+        }
+      },
+    })
+    .addTo(map)
+}
+
 onMounted(async () => {
   try {
-    const [accidentsResponse, trafficResponse, weatherData] = await Promise.all([
+    const [accidentsResponse, roadsResponse, weatherData] = await Promise.all([
       fetch('/assets/data/accidents.json'),
-      fetch('/assets/data/traffic.json'),
+      fetch('/assets/data/medellin-roads.json'),
       getWeatherData(),
     ])
 
     const accidents = await accidentsResponse.json()
-    const traffic = await trafficResponse.json()
+    const roads = await roadsResponse.json()
+    const apiKey = getConfiguredEnv('VITE_TOMTOM_API_KEY')
 
     weather.value = weatherData
 
-    // Inicializar mapa de Leaflet centrado en Medellín
-    map = L.map(mapContainer.value).setView([6.25184, -75.56359], 12)
+    // Cargar zonas de riesgo desde Django API
+    try {
+      const zonesData = await fetchZones()
+      zones.value = Array.isArray(zonesData) ? zonesData : []
+      apiConnected.value = true
+    } catch (err) {
+      zonesError.value = 'Zonas no disponibles (Django API)'
+      console.warn('[Inicio] Zonas API:', err.message)
+    }
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors',
-    }).addTo(map)
-
-    const heatPoints = accidents
-      .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng))
-      .map((item) => [item.lat, item.lng, item.intensity ?? 0.5])
-
-    L.heatLayer(heatPoints, { radius: 24, blur: 18, maxZoom: 14 }).addTo(map)
+    await initLeafletMap(accidents).catch((err) => {
+      console.warn('[Inicio] Leaflet map init failed:', err?.message || err)
+      mapError.value = 'No fue posible cargar el mapa. El resto del panel sigue disponible.'
+    })
 
     // Configurar gráfica interactiva
     const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
     const accidentsSeries = buildHourlySeries(accidents)
-    const trafficSeries = traffic.hourlyCongestion ?? []
 
     chart = new Chart(chartCanvas.value, {
       type: 'line',
@@ -83,18 +373,6 @@ onMounted(async () => {
             borderWidth: 3,
             pointRadius: 3,
             pointHoverRadius: 6,
-          },
-          {
-            label: 'Congestión (%)',
-            data: trafficSeries,
-            borderColor: '#0d6efd',
-            backgroundColor: 'rgba(13, 110, 253, 0.05)',
-            tension: 0.4,
-            fill: true,
-            borderWidth: 3,
-            pointRadius: 3,
-            pointHoverRadius: 6,
-            yAxisID: 'y1',
           },
         ],
       },
@@ -137,22 +415,40 @@ onMounted(async () => {
               font: { family: "'Inter', sans-serif" }
             }
           },
-          y1: {
-            beginAtZero: true,
-            max: 100,
-            position: 'right',
-            grid: { drawOnChartArea: false },
-            title: { display: true, text: 'Congestión (%)', font: { family: "'Inter', sans-serif", weight: '600' } },
-            ticks: {
-              callback: (value) => `${value}%`,
-              font: { family: "'Inter', sans-serif" }
-            }
-          },
         },
       },
     })
+
+    if (!apiKey) {
+      trafficSegments.value = []
+      trafficIncidents.value = []
+    } else {
+      const [trafficResult, incidentsResult] = await Promise.allSettled([
+        loadTrafficSegments(roads, apiKey),
+        loadTrafficIncidents(apiKey),
+      ])
+      if (trafficResult.status === 'rejected') {
+        console.warn('[Inicio] Traffic segments:', trafficResult.reason?.message)
+      }
+      if (incidentsResult.status === 'rejected') {
+        console.warn('[Inicio] Incidents:', incidentsResult.reason?.message)
+      }
+      renderTrafficLayers()
+    }
+
+    // Cargar predicción de congestión desde Django
+    try {
+      const currentHour = new Date().getHours()
+      const predictionData = await fetchCongestionPrediction(currentHour)
+      prediction.value = predictionData
+    } catch (err) {
+      predictionError.value = 'Predicción no disponible'
+      console.warn('[Inicio] Predicción:', err.message)
+    }
   } catch (error) {
     console.error('Error al inicializar el dashboard de inicio:', error)
+    trafficError.value = 'No fue posible cargar TomTom Traffic.'
+    incidentsError.value = 'No fue posible cargar TomTom Incidents.'
   } finally {
     loading.value = false
   }
@@ -161,7 +457,9 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   chart?.destroy()
   map?.remove()
+  mapLoaded = false
 })
+
 </script>
 
 <template>
@@ -173,10 +471,15 @@ onBeforeUnmount(() => {
         <p class="text-muted mb-0">Información en tiempo real sobre incidentes, congestión y alertas viales en Medellín.</p>
       </div>
       <div class="col-md-4 text-md-end mt-3 mt-md-0">
-        <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
-          <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
-          Monitoreo Activo
-        </span>
+        <div class="d-flex gap-2 justify-content-md-end flex-wrap">
+          <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
+            <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
+            Monitoreo Activo
+          </span>
+          <span v-if="apiConnected" class="badge bg-success px-3 py-2 rounded-pill shadow-sm">
+            Django API ✓
+          </span>
+        </div>
       </div>
     </div>
 
@@ -186,8 +489,8 @@ onBeforeUnmount(() => {
         <div class="card h-100 shadow-sm border-0 card-hover-effect">
           <div class="card-body p-3 p-md-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
-              <h5 class="fw-bold text-dark m-0">Mapa de Calor de Siniestralidad</h5>
-              <span class="text-muted small"><i class="bi bi-geo-alt-fill me-1"></i>Últimos registros</span>
+              <h5 class="fw-bold text-dark m-0">Mapa Operativo Mapbox</h5>
+              <span class="text-muted small"><i class="bi bi-geo-alt-fill me-1"></i>Accidentes, tráfico e incidentes</span>
             </div>
             <div ref="mapContainer" class="map-container rounded border shadow-inner"></div>
           </div>
@@ -198,10 +501,10 @@ onBeforeUnmount(() => {
         <div class="card h-100 shadow-sm border-0 card-hover-effect card-gradient-bg">
           <div class="card-body p-4 d-flex flex-column justify-content-between">
             <div>
-              <h5 class="fw-bold text-dark mb-4">Reporte del Clima Actual</h5>
+              <h5 class="fw-bold text-dark mb-4">Reporte SIATA Actual</h5>
               <div class="d-flex align-items-center mb-4">
                 <div class="weather-temp-container me-3 bg-white p-3 rounded-4 shadow-sm border">
-                  <span class="display-5 fw-bold text-primary">{{ weather?.temperature ?? '22' }}°</span>
+                  <span class="display-5 fw-bold text-primary">{{ weather?.temperature ?? '21' }}°</span>
                   <span class="text-muted">C</span>
                 </div>
                 <div>
@@ -230,7 +533,8 @@ onBeforeUnmount(() => {
             <div class="mt-4 pt-3 border-top">
               <p class="text-muted small mb-0">
                 <i class="bi bi-info-circle me-1"></i>
-                Fuente: Clima {{ weather?.source === 'openweathermap' ? 'en vivo desde OpenWeather' : 'simulado para demostración' }}.
+                Fuente: {{ weather?.source === 'siata' ? 'SIATA en vivo' : 'respaldo local por falta de respuesta SIATA' }}.
+                <span v-if="weather?.rainfallForecast != null"> Lluvia: {{ weather.rainfallForecast }}%</span>
               </p>
             </div>
           </div>
@@ -238,8 +542,8 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Segunda Fila: Gráfico de Tendencias -->
-    <div class="row">
+    <!-- Segunda Fila: Gráfico de Tendencias Horarias (Chart.js) -->
+    <div class="row mb-4">
       <div class="col-12">
         <div class="card shadow-sm border-0 card-hover-effect">
           <div class="card-body p-4">
@@ -257,17 +561,160 @@ onBeforeUnmount(() => {
                 </span>
               </div>
             </div>
-
             <div class="chart-container" style="position: relative; height: 320px; width: 100%">
               <canvas ref="chartCanvas" aria-label="Gráfico interactivo de tráfico y accidentes"></canvas>
             </div>
-            
             <div v-if="loading" class="d-flex align-items-center justify-content-center mt-3 py-4">
               <div class="spinner-border text-primary me-2" role="status">
                 <span class="visually-hidden">Cargando...</span>
               </div>
               <span class="text-muted">Cargando visualizaciones analíticas...</span>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tercera Fila: Flujos TomTom en Tiempo Real -->
+    <div class="row mt-4">
+      <div class="col-12">
+        <div class="card shadow-sm border-0 card-hover-effect">
+          <div class="card-body p-4">
+            <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+              <div>
+                <h5 class="fw-bold text-dark mb-1">Flujos de Tráfico TomTom en Tiempo Real</h5>
+                <p class="text-muted small mb-0">
+                  Datos en vivo de velocidad y congestión tomados desde
+                  <span class="badge bg-secondary-subtle text-secondary border">TomTom Traffic API</span>
+                </p>
+              </div>
+              <div class="d-flex gap-2 flex-wrap align-items-center">
+                <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill">
+                  Promedio {{ trafficSummary.average }}%
+                </span>
+                <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-3 py-2 rounded-pill">
+                  Críticas {{ trafficSummary.heavy }}
+                </span>
+                <span class="badge bg-dark-subtle text-dark border border-dark-subtle px-3 py-2 rounded-pill">
+                  Incidentes {{ incidentSummary.total }}
+                </span>
+                <span v-if="trafficLoading" class="badge bg-warning text-dark px-3 py-2 rounded-pill">
+                  Cargando TomTom...
+                </span>
+                <span v-if="incidentsLoading" class="badge bg-info text-dark px-3 py-2 rounded-pill">
+                  Cargando incidentes...
+                </span>
+              </div>
+            </div>
+
+            <div class="routes-chart-area">
+              <div class="row g-3">
+                <div class="col-md-8">
+                  <div class="routes-visual-container rounded-3 border bg-light p-3">
+                    <div class="mb-2 d-flex align-items-center gap-2">
+                      <span class="badge bg-primary">Mapa de Flujos Activos</span>
+                      <span class="text-muted small">Medellín — Segmentos TomTom</span>
+                    </div>
+                    <div v-if="!trafficLoading && !trafficSegments.length" class="text-muted small py-3">
+                      <i class="bi bi-info-circle me-1"></i>Datos de tráfico en tiempo real requieren clave TomTom API.
+                    </div>
+                    <div v-for="(route, idx) in trafficSegments.slice(0, 10)" :key="route.name"
+                      class="route-flow-bar d-flex align-items-center gap-2 mb-2 p-2 rounded-3">
+                      <span class="route-number text-white rounded-2 px-2 py-1"
+                        :style="{ background: route.congestionPct >= 85 ? '#dc2626' : route.congestionPct >= 70 ? '#f97316' : '#16a34a' }">
+                        {{ String(idx + 1).padStart(2, '0') }}
+                      </span>
+                      <div class="flex-grow-1">
+                        <div class="small fw-semibold text-dark mb-1">{{ route.name || 'Vía TomTom' }}</div>
+                        <div class="text-muted x-small mb-1">
+                          {{ route.currentSpeed }} km/h vs {{ route.freeFlowSpeed }} km/h libres
+                        </div>
+                        <div class="progress" style="height:6px;">
+                          <div class="progress-bar progress-bar-striped progress-bar-animated"
+                            :class="route.congestionPct >= 85 ? 'bg-danger' : route.congestionPct >= 70 ? 'bg-warning' : 'bg-success'"
+                            :style="{ width: route.congestionPct + '%' }"
+                            role="progressbar"
+                            :aria-valuenow="route.congestionPct"
+                            aria-valuemin="0" aria-valuemax="100">
+                          </div>
+                        </div>
+                      </div>
+                      <span class="fw-bold small"
+                        :class="route.congestionPct >= 85 ? 'text-danger' : route.congestionPct >= 70 ? 'text-warning' : 'text-success'">
+                        {{ route.congestionPct }}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="col-md-4">
+                  <div class="h-100 d-flex flex-column gap-3">
+                    <div class="card border-0 bg-danger-subtle p-3 text-center rounded-4">
+                      <div class="fs-1 fw-black text-danger">{{ trafficSummary.heavy }}</div>
+                      <div class="small text-danger fw-semibold">Rutas en Nivel Crítico (&ge;85%)</div>
+                    </div>
+                    <div class="card border-0 bg-primary-subtle p-3 text-center rounded-4">
+                      <div class="fs-1 fw-black text-primary">
+                        {{ trafficSummary.average }}%
+                      </div>
+                      <div class="small text-primary fw-semibold">Congestión Promedio</div>
+                    </div>
+                    <div class="card border-0 bg-info-subtle p-3 text-center rounded-4">
+                      <div class="fs-1 fw-black text-info">{{ incidentSummary.accidents }}</div>
+                      <div class="small text-info fw-semibold">Incidentes tipo accidente</div>
+                    </div>
+                    <div class="card border-0 bg-secondary-subtle p-3 rounded-4">
+                      <p class="x-small text-secondary mb-1">
+                        <strong>Fuente técnica:</strong> TomTom Traffic API <code>flowSegmentData</code> sobre
+                        puntos estratégicos de Medellín, sin usar la capa estática anterior.
+                      </p>
+                    </div>
+                    <div class="card border-0 bg-white p-3 rounded-4 shadow-sm">
+                      <div class="small fw-semibold mb-2">Incidentes recientes</div>
+                      <div v-if="trafficIncidents.length === 0" class="text-muted x-small">
+                        No se detectaron incidentes activos en el bbox actual.
+                      </div>
+                      <ul v-else class="list-unstyled mb-0 incident-mini-list">
+                        <li v-for="incident in trafficIncidents.slice(0, 4)" :key="incident?.properties?.id || incident.type">
+                          <span class="incident-mini-dot" :style="{ background: getIncidentColor(incident?.properties?.iconCategory) }"></span>
+                          <span class="x-small text-dark">
+                            {{ getIncidentLabel(incident) }}
+                          </span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <!-- Predicción de congestión desde Django -->
+                    <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+                      <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+                      <div class="x-small text-muted mb-2">
+                        Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+                      </div>
+                      <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+                        <span class="badge rounded-pill small"
+                          :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Zonas de riesgo desde Django -->
+                    <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+                      <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+                      <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ zone.name }}</span>
+                        <span class="badge rounded-pill small"
+                          :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ zone.risk_level }}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       </div>
@@ -304,6 +751,20 @@ onBeforeUnmount(() => {
 .weather-temp-container {
   min-width: 90px;
   text-align: center;
+}
+
+.incident-mini-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.incident-mini-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
 }
 
 @media (max-width: 768px) {

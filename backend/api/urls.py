@@ -13,6 +13,7 @@ from .views import (
     LoginView,
     LogoutView,
     MeView,
+    SiataWeatherView,
     WeatherSimView,
     WeatherStatusView,
     ZonesListView,
@@ -34,6 +35,7 @@ urlpatterns = [
     path('accidents/', AccidentListView.as_view(), name='accident-list'),
     path('zones/', ZonesListView.as_view(), name='zone-list'),
     path('weather/', WeatherStatusView.as_view(), name='weather-status'),
+    path('siata_weather/', SiataWeatherView.as_view(), name='siata-weather'),
     path('congestion_prediction/', CongestionPredictionView.as_view(), name='congestion-prediction'),
     path('simulate_rain/', WeatherSimView.as_view(), name='simulate-rain'),
 ]

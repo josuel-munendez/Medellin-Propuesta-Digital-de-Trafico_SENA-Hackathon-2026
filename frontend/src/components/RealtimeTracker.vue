@@ -1,23 +1,37 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref, reactive } from 'vue'
-import L from 'leaflet'
-import { fetchMultipleSegments, getTrafficColor } from '../assets/js/trafficFlow.js'
+import mapboxgl from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
+import { fetchMultipleSegments, getTrafficLevel } from '../assets/js/trafficFlow.js'
+import { fetchSiataWeather } from '../services/api'
 
-// ─── Estado de la UI ──────────────────────────────────────────────────────────
 const mapContainer = ref(null)
 const gpsActive = ref(false)
-const gpsStatus = ref('idle')   // 'idle' | 'searching' | 'active' | 'denied' | 'unsupported'
+const gpsStatus = ref('idle')
 const gpsAccuracy = ref(null)
 const connectedUnits = ref(0)
+const trafficLayerVisible = ref(true)
+const trafficLoading = ref(false)
+const lastTrafficUpdate = ref(null)
+const siataWeather = reactive({
+  location: 'Medellín, CO',
+  condition: 'Cargando clima SIATA',
+  temperature: null,
+  humidity: null,
+  wind_speed: null,
+  source: 'siata',
+})
+const siataLoading = ref(false)
+const siataError = ref('')
 
-// ─── Mapa y recursos de Leaflet ───────────────────────────────────────────────
 let map = null
 let ownMarker = null
 let watchId = null
+let vehicleSimInterval = null
 const vehicleMarkers = {}
+const vehicleRouteIndex = {}
+const trafficSourceId = 'traffic-segments'
 
-// ─── Rutas simuladas de vehículos en Medellín ────────────────────────────────
-// Coordenadas reales de vías principales: El Poblado, Centro, Laureles, Robledo, Bello.
 const VEHICLE_ROUTES = [
   {
     id: 'MIO-001',
@@ -76,120 +90,244 @@ const VEHICLE_ROUTES = [
   },
 ]
 
-// Índice actual en la ruta para cada vehículo
-const vehicleRouteIndex = {}
-let vehicleSimInterval = null
-
-// ─── Estado de la capa de tráfico en tiempo real ──────────────────────────────
-const trafficLayerVisible = ref(true)
-const trafficSegments = ref([])
-let trafficLayerGroup = null
-const trafficLoading = ref(false)
-const lastTrafficUpdate = ref(null)
-let trafficRefreshInterval = null
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-function createVehicleIcon(color, emoji) {
-  return L.divIcon({
-    className: '',
-    html: `
-      <div style="
-        background:${color};
-        border:2px solid white;
-        border-radius:50%;
-        width:32px;height:32px;
-        display:flex;align-items:center;justify-content:center;
-        font-size:16px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        transition: all 0.4s ease;
-      ">${emoji}</div>`,
-    iconSize: [32, 32],
-    iconAnchor: [16, 16],
-  })
+function createMarkerElement(color, emoji) {
+  const element = document.createElement('div')
+  element.style.width = '34px'
+  element.style.height = '34px'
+  element.style.borderRadius = '50%'
+  element.style.display = 'flex'
+  element.style.alignItems = 'center'
+  element.style.justifyContent = 'center'
+  element.style.background = color
+  element.style.color = '#fff'
+  element.style.fontSize = '16px'
+  element.style.boxShadow = '0 2px 10px rgba(0,0,0,0.25)'
+  element.style.border = '2px solid white'
+  element.textContent = emoji
+  return element
 }
 
-function createOwnIcon() {
-  return L.divIcon({
-    className: '',
-    html: `
-      <div style="position:relative;width:24px;height:24px;">
-        <div style="
-          position:absolute;top:0;left:0;
-          width:24px;height:24px;
-          border-radius:50%;
-          background:rgba(13,110,253,0.25);
-          animation: gps-pulse 2s ease-out infinite;
-        "></div>
-        <div style="
-          position:absolute;top:4px;left:4px;
-          width:16px;height:16px;
-          border-radius:50%;
-          background:#0d6efd;
-          border:2px solid white;
-          box-shadow:0 2px 6px rgba(13,110,253,0.5);
-        "></div>
-      </div>`,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-  })
+function createOwnMarkerElement() {
+  const outer = document.createElement('div')
+  outer.style.position = 'relative'
+  outer.style.width = '28px'
+  outer.style.height = '28px'
+
+  const pulse = document.createElement('div')
+  pulse.style.position = 'absolute'
+  pulse.style.top = '0'
+  pulse.style.left = '0'
+  pulse.style.width = '28px'
+  pulse.style.height = '28px'
+  pulse.style.borderRadius = '50%'
+  pulse.style.background = 'rgba(13,110,253,0.28)'
+  pulse.style.animation = 'pulse-dot 1.5s ease-in-out infinite'
+
+  const pin = document.createElement('div')
+  pin.style.position = 'absolute'
+  pin.style.top = '6px'
+  pin.style.left = '6px'
+  pin.style.width = '16px'
+  pin.style.height = '16px'
+  pin.style.borderRadius = '50%'
+  pin.style.background = '#0d6efd'
+  pin.style.border = '2px solid white'
+  pin.style.boxShadow = '0 2px 10px rgba(13,110,253,0.45)'
+
+  outer.appendChild(pulse)
+  outer.appendChild(pin)
+  return outer
 }
 
-// ─── Inicialización del Mapa ──────────────────────────────────────────────────
-function initMap() {
-  map = L.map(mapContainer.value, { zoomControl: true }).setView([6.2518, -75.5636], 13)
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(map)
-
-  // Líneas de rutas (trazado estático de referencia inspirado en TrafficVisualization)
-  VEHICLE_ROUTES.forEach((route) => {
-    L.polyline(route.coords, {
+function buildVehicleRouteFeatures() {
+  return VEHICLE_ROUTES.map((route) => ({
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates: route.coords.map(([lat, lng]) => [lng, lat]),
+    },
+    properties: {
+      id: route.id,
+      label: route.label,
       color: route.color,
-      weight: 3,
-      opacity: 0.3,
-      dashArray: '6, 6',
-    })
-      .addTo(map)
-      .bindTooltip(route.label, { sticky: true })
+    },
+  }))
+}
 
-    vehicleRouteIndex[route.id] = 0
+function buildTrafficGeoJSON(segments) {
+  return {
+    type: 'FeatureCollection',
+    features: segments
+      .filter((segment) => Array.isArray(segment.coordinates) && segment.coordinates.length > 1)
+      .map((segment, index) => ({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: segment.coordinates.map(([lat, lng]) => [lng, lat]),
+        },
+        properties: {
+          id: segment.id ?? index,
+          name: segment.name ?? 'Tramo TomTom',
+          currentSpeed: segment.currentSpeed,
+          freeFlowSpeed: segment.freeFlowSpeed,
+          level: segment.level ?? getTrafficLevel(segment.currentSpeed, segment.freeFlowSpeed),
+          ratio: segment.ratio,
+          color: segment.color || '#ef4444',
+        },
+      })),
+  }
+}
+
+function trafficPopupContent(properties) {
+  return `
+    <div style="font-family:'Inter',sans-serif;min-width:190px">
+      <strong style="display:block;margin-bottom:4px">🛣️ ${properties.name || 'Tramo TomTom'}</strong>
+      <span style="font-size:12px;color:#475569">Velocidad actual: <strong>${properties.currentSpeed ?? '—'} km/h</strong></span><br/>
+      <span style="font-size:12px;color:#475569">Velocidad libre: <strong>${properties.freeFlowSpeed ?? '—'} km/h</strong></span><br/>
+      <span style="font-size:12px;color:#475569">Congestión: <strong>${properties.level || 'Desconocido'}</strong></span>
+      <span style="font-size:12px;color:#475569;display:block;margin-top:6px">Fuente: TomTom Traffic</span>
+    </div>
+  `
+}
+
+const trafficClickHandler = (event) => {
+  if (!event.features || !event.features.length) return
+  const feature = event.features[0]
+  if (!feature.properties) return
+
+  new mapboxgl.Popup({ closeButton: true, closeOnClick: true })
+    .setLngLat(event.lngLat)
+    .setHTML(trafficPopupContent(feature.properties))
+    .addTo(map)
+}
+
+function initMap() {
+  const accessToken = import.meta.env.VITE_MAPBOX_ACCESS_TOKEN
+  if (!accessToken) {
+    console.warn('[RealtimeTracker] VITE_MAPBOX_ACCESS_TOKEN no configurado. El mapa Mapbox puede no cargarse correctamente.')
+  }
+  mapboxgl.accessToken = accessToken || ''
+
+  map = new mapboxgl.Map({
+    container: mapContainer.value,
+    style: 'mapbox://styles/mapbox/streets-v12',
+    center: [-75.5636, 6.2518],
+    zoom: 13,
+  })
+
+  map.addControl(new mapboxgl.NavigationControl(), 'top-right')
+
+  map.on('load', () => {
+    const tomtomKey = import.meta.env.VITE_TOMTOM_API_KEY
+    if (tomtomKey) {
+      map.addSource('tomtom-traffic', {
+        type: 'raster',
+        tiles: [
+          `https://api.tomtom.com/map/1/tile/flow/relative/png8/{z}/{x}/{y}.png?key=${tomtomKey}`,
+        ],
+        tileSize: 256,
+      })
+      map.addLayer({
+        id: 'tomtom-traffic',
+        type: 'raster',
+        source: 'tomtom-traffic',
+        paint: { 'raster-opacity': 0.45 },
+      })
+    }
+
+    map.addSource('vehicle-routes', {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: buildVehicleRouteFeatures(),
+      },
+    })
+
+    map.addLayer({
+      id: 'vehicle-routes-layer',
+      type: 'line',
+      source: 'vehicle-routes',
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 3,
+        'line-opacity': 0.3,
+      },
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round',
+      },
+    })
+
+    map.addSource(trafficSourceId, {
+      type: 'geojson',
+      data: {
+        type: 'FeatureCollection',
+        features: [],
+      },
+    })
+
+    map.addLayer({
+      id: 'traffic-segments-layer',
+      type: 'line',
+      source: trafficSourceId,
+      paint: {
+        'line-color': ['get', 'color'],
+        'line-width': 6,
+        'line-opacity': 0.8,
+      },
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round',
+      },
+    })
+
+    map.on('click', 'traffic-segments-layer', trafficClickHandler)
+    map.on('mouseenter', 'traffic-segments-layer', () => {
+      map.getCanvas().style.cursor = 'pointer'
+    })
+    map.on('mouseleave', 'traffic-segments-layer', () => {
+      map.getCanvas().style.cursor = ''
+    })
+
+    startVehicleSimulation()
+    loadTrafficData()
   })
 }
 
-// ─── Simulación de vehículos (adaptado de Realtime_Tracker) ──────────────────
-function startVehicleSimulation() {
-  VEHICLE_ROUTES.forEach((route) => {
-    const idx = vehicleRouteIndex[route.id]
-    const [lat, lng] = route.coords[idx]
+function updateTrafficLayer(segments) {
+  if (!map || !map.isStyleLoaded() || !map.getSource(trafficSourceId)) return
+  map.getSource(trafficSourceId).setData(buildTrafficGeoJSON(segments))
+}
 
-    const marker = L.marker([lat, lng], {
-      icon: createVehicleIcon(route.color, route.icon),
-      title: route.label,
-    })
+function startVehicleSimulation() {
+  if (!map || !map.isStyleLoaded()) return
+
+  VEHICLE_ROUTES.forEach((route) => {
+    vehicleRouteIndex[route.id] = 0
+    const [lat, lng] = route.coords[0]
+    const marker = new mapboxgl.Marker({ element: createMarkerElement(route.color, route.icon), anchor: 'center' })
+      .setLngLat([lng, lat])
+      .setPopup(
+        new mapboxgl.Popup({ offset: 18 }).setHTML(`
+          <div style="font-family:'Inter',sans-serif;min-width:160px">
+            <strong style="display:block;margin-bottom:4px">${route.icon} ${route.label}</strong>
+            <span style="font-size:12px;color:#475569">ID: <code>${route.id}</code></span><br/>
+            <span style="font-size:12px;color:#475569">En ruta activa</span>
+          </div>
+        `)
+      )
       .addTo(map)
-      .bindPopup(`
-        <div style="font-family:'Inter',sans-serif;min-width:160px">
-          <strong style="display:block;margin-bottom:4px">${route.icon} ${route.label}</strong>
-          <span style="font-size:12px;color:#64748b">ID: <code>${route.id}</code></span><br/>
-          <span style="font-size:12px;color:#64748b">En ruta activa</span>
-        </div>
-      `)
 
     vehicleMarkers[route.id] = marker
   })
 
   connectedUnits.value = VEHICLE_ROUTES.length
-
-  // Actualizar posición de cada vehículo a lo largo de su ruta (cada 1.8 s)
   vehicleSimInterval = setInterval(() => {
     VEHICLE_ROUTES.forEach((route) => {
       const maxIdx = route.coords.length - 1
       vehicleRouteIndex[route.id] = (vehicleRouteIndex[route.id] + 1) % (maxIdx + 1)
-      const idx = vehicleRouteIndex[route.id]
-      const [lat, lng] = route.coords[idx]
-      vehicleMarkers[route.id]?.setLatLng([lat, lng])
+      const [lat, lng] = route.coords[vehicleRouteIndex[route.id]]
+      vehicleMarkers[route.id]?.setLngLat([lng, lat])
     })
   }, 1800)
 }
@@ -199,12 +337,11 @@ function stopVehicleSimulation() {
     clearInterval(vehicleSimInterval)
     vehicleSimInterval = null
   }
-  Object.values(vehicleMarkers).forEach((m) => map?.removeLayer(m))
-  Object.keys(vehicleMarkers).forEach((k) => delete vehicleMarkers[k])
+  Object.values(vehicleMarkers).forEach((marker) => marker.remove())
+  Object.keys(vehicleMarkers).forEach((id) => delete vehicleMarkers[id])
   connectedUnits.value = 0
 }
 
-// ─── Rastreo GPS propio (Realtime_Tracker lógica cliente) ────────────────────
 function startGPS() {
   if (!navigator.geolocation) {
     gpsStatus.value = 'unsupported'
@@ -221,12 +358,13 @@ function startGPS() {
       gpsActive.value = true
 
       if (!ownMarker) {
-        ownMarker = L.marker([latitude, longitude], { icon: createOwnIcon() })
+        ownMarker = new mapboxgl.Marker({ element: createOwnMarkerElement(), anchor: 'center' })
+          .setLngLat([longitude, latitude])
+          .setPopup(new mapboxgl.Popup({ offset: 18 }).setHTML('<strong>📍 Tu ubicación actual</strong><br/><small>GPS activo en este dispositivo</small>'))
           .addTo(map)
-          .bindPopup('<strong>📍 Tu ubicación actual</strong><br/><small>GPS activo en este dispositivo</small>')
-        map.setView([latitude, longitude], 15)
+        map.flyTo({ center: [longitude, latitude], zoom: 15, speed: 0.7 })
       } else {
-        ownMarker.setLatLng([latitude, longitude])
+        ownMarker.setLngLat([longitude, latitude])
       }
     },
     (error) => {
@@ -243,7 +381,7 @@ function stopGPS() {
     watchId = null
   }
   if (ownMarker) {
-    map?.removeLayer(ownMarker)
+    ownMarker.remove()
     ownMarker = null
   }
   gpsActive.value = false
@@ -259,58 +397,47 @@ function toggleGPS() {
   }
 }
 
-// ─── Capa de Tráfico en Tiempo Real ──────────────────────────────────────────
+async function loadSiataWeather() {
+  siataLoading.value = true
+  siataError.value = ''
+
+  try {
+    const payload = await fetchSiataWeather()
+    siataWeather.location = payload.location || 'Medellín, CO'
+    siataWeather.condition = payload.condition || 'Sin información'
+    siataWeather.temperature = payload.temperature ?? null
+    siataWeather.humidity = payload.humidity ?? null
+    siataWeather.wind_speed = payload.wind_speed ?? null
+    siataWeather.source = payload.source || 'siata'
+  } catch (error) {
+    siataError.value = error?.message || 'No se pudo cargar clima SIATA'
+  } finally {
+    siataLoading.value = false
+  }
+}
+
 async function loadTrafficData() {
   trafficLoading.value = true
+
   try {
     const roadsRes = await fetch('/assets/data/medellin-roads.json')
     const roads = await roadsRes.json()
-
     const apiKey = import.meta.env.VITE_TOMTOM_API_KEY
+
     if (!apiKey) {
-      console.warn('[RealtimeTracker] VITE_TOMTOM_API_KEY no configurada — capa de tráfico deshabilitada')
-      trafficLoading.value = false
+      console.warn('[RealtimeTracker] VITE_TOMTOM_API_KEY no configurada — capa de tráfico basada en TomTom deshabilitada')
       return
     }
 
     const results = await fetchMultipleSegments(roads, apiKey)
-    trafficSegments.value = results.filter(Boolean)
+    const segments = results.filter(Boolean)
+    updateTrafficLayer(segments)
 
-    // Limpiar capa anterior
-    if (trafficLayerGroup) {
-      map?.removeLayer(trafficLayerGroup)
-    }
-
-    trafficLayerGroup = L.layerGroup()
-
-    trafficSegments.value.forEach((segment) => {
-      if (!segment || !segment.coordinates || segment.coordinates.length < 2) return
-
-      const polyline = L.polyline(segment.coordinates, {
-        color: segment.color,
-        weight: 5,
-        opacity: 0.8,
-      })
-
-      const congestionPct = Math.round((1 - segment.ratio) * 100)
-      polyline.bindPopup(`
-        <div style="font-family:'Inter',sans-serif;min-width:180px">
-          <strong style="display:block;margin-bottom:4px">🛣️ ${segment.name || 'Vía sin nombre'}</strong>
-          <span style="font-size:12px;color:#64748b">Velocidad actual: <strong>${segment.currentSpeed} km/h</strong></span><br/>
-          <span style="font-size:12px;color:#64748b">Velocidad libre: <strong>${segment.freeFlowSpeed} km/h</strong></span><br/>
-          <span style="font-size:12px;color:#64748b">Congestión: <strong>${congestionPct}%</strong></span>
-        </div>
-      `)
-
-      trafficLayerGroup.addLayer(polyline)
+    lastTrafficUpdate.value = new Date().toLocaleTimeString('es-CO', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
     })
-
-    if (trafficLayerVisible.value && map) {
-      trafficLayerGroup.addTo(map)
-    }
-
-    const now = new Date()
-    lastTrafficUpdate.value = now.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
   } catch (err) {
     console.warn('[RealtimeTracker] Error cargando datos de tráfico:', err)
   } finally {
@@ -320,30 +447,31 @@ async function loadTrafficData() {
 
 function toggleTrafficLayer() {
   trafficLayerVisible.value = !trafficLayerVisible.value
-  if (trafficLayerVisible.value && trafficLayerGroup && map) {
-    trafficLayerGroup.addTo(map)
-  } else if (!trafficLayerVisible.value && trafficLayerGroup && map) {
-    map.removeLayer(trafficLayerGroup)
+  if (!map || !map.isStyleLoaded()) return
+
+  const visibility = trafficLayerVisible.value ? 'visible' : 'none'
+  if (map.getLayer('traffic-segments-layer')) {
+    map.setLayoutProperty('traffic-segments-layer', 'visibility', visibility)
+  }
+  if (map.getLayer('tomtom-traffic')) {
+    map.setLayoutProperty('tomtom-traffic', 'visibility', visibility)
   }
 }
 
-// ─── Ciclo de vida ────────────────────────────────────────────────────────────
 onMounted(() => {
   initMap()
-  startVehicleSimulation()
-  loadTrafficData()
-  trafficRefreshInterval = setInterval(loadTrafficData, 120000)
+  loadSiataWeather()
 })
 
 onBeforeUnmount(() => {
-  if (trafficRefreshInterval) {
-    clearInterval(trafficRefreshInterval)
-    trafficRefreshInterval = null
-  }
   stopGPS()
   stopVehicleSimulation()
-  map?.remove()
-  map = null
+  if (map) {
+    if (map.getLayer('traffic-segments-layer')) {
+      map.off('click', 'traffic-segments-layer', trafficClickHandler)
+    }
+    map.remove()
+  }
 })
 </script>
 
@@ -481,6 +609,32 @@ onBeforeUnmount(() => {
               <div class="alert alert-secondary py-2 small mb-0 border-0 rounded-3">
                 Tu navegador no soporta geolocalización.
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clima SIATA -->
+        <div class="card border-0 shadow-sm mb-3 card-hover-effect">
+          <div class="card-body p-3">
+            <div class="d-flex align-items-center justify-content-between mb-3">
+              <h6 class="fw-bold text-dark mb-0">Clima SIATA</h6>
+              <span class="badge bg-info text-dark">LIVE</span>
+            </div>
+            <div v-if="siataLoading" class="text-center py-3">
+              <div class="spinner-border text-primary" style="width:28px;height:28px"></div>
+              <p class="text-muted small mt-2 mb-0">Consultando SIATA...</p>
+            </div>
+            <div v-else>
+              <p class="mb-1 text-muted small">{{ siataWeather.location }}</p>
+              <h5 class="mb-1">{{ siataWeather.temperature ?? '—' }}°C</h5>
+              <p class="small mb-2 text-secondary">{{ siataWeather.condition }}</p>
+              <div class="d-flex gap-2 flex-wrap small text-muted">
+                <span>Humedad: {{ siataWeather.humidity ?? '—' }}%</span>
+                <span>Viento: {{ siataWeather.wind_speed ?? '—' }} km/h</span>
+              </div>
+              <button @click="loadSiataWeather" class="btn btn-outline-primary btn-sm w-100 mt-3">Actualizar SIATA</button>
+              <p class="x-small text-muted mt-2 mb-0">Origen: {{ siataWeather.source }}</p>
+              <p v-if="siataError" class="text-danger small mt-2 mb-0">{{ siataError }}</p>
             </div>
           </div>
         </div>

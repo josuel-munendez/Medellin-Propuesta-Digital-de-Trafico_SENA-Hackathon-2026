@@ -98,10 +98,10 @@
             <div class="card-body p-4">
               <div class="avatar-container mb-3 mx-auto">
                 <div class="avatar-placeholder bg-gradient-primary">
-                  <span class="fs-3 fw-bold text-white">FM</span>
+                  <span class="fs-3 fw-bold text-white">PQ</span>
                 </div>
               </div>
-              <h5 class="fw-bold text-dark mb-1">Felipe Muñoz</h5>
+              <h5 class="fw-bold text-dark mb-1">Pipe Quiros</h5>
               <p class="text-primary small fw-semibold mb-3">Frontend Developer & UX Designer</p>
               <p class="text-muted small mb-3">Especialista en Vue.js, diseño de interfaces responsivas premium, integración de mapas interactivos y optimización de PWA.</p>
               <div class="d-flex justify-content-center gap-2">
@@ -122,7 +122,7 @@
                   <span class="fs-3 fw-bold text-white">JM</span>
                 </div>
               </div>
-              <h5 class="fw-bold text-dark mb-1">Josuel Menendez</h5>
+              <h5 class="fw-bold text-dark mb-1">Jose Muñoz</h5>
               <p class="text-success small fw-semibold mb-3">Backend Developer & DB Admin</p>
               <p class="text-muted small mb-3">Responsable del desarrollo del backend con Django, modelado de bases de datos relacionales en MySQL y diseño de APIs REST.</p>
               <div class="d-flex justify-content-center gap-2">
@@ -140,10 +140,10 @@
             <div class="card-body p-4">
               <div class="avatar-container mb-3 mx-auto">
                 <div class="avatar-placeholder bg-gradient-info">
-                  <span class="fs-3 fw-bold text-white">IA</span>
+                  <span class="fs-3 fw-bold text-white">SP</span>
                 </div>
               </div>
-              <h5 class="fw-bold text-dark mb-1">Isaac Alzate</h5>
+              <h5 class="fw-bold text-dark mb-1">Samuel Perez</h5>
               <p class="text-info small fw-semibold mb-3">Data Analyst & QA Engineer</p>
               <p class="text-muted small mb-3">Experto en procesamiento de datasets de siniestralidad, análisis de tendencias horarias, georreferenciación y pruebas de usabilidad.</p>
               <div class="d-flex justify-content-center gap-2">

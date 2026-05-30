@@ -36,6 +36,7 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/offline.html',
         globPatterns: ['**/*.{js,css,html,svg,json}'],
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
     }),
   ],

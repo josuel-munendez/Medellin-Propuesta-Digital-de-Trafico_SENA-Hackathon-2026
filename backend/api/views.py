@@ -37,6 +37,7 @@ def api_root(request):
                 'accidents': '/api/accidents/',
                 'zones': '/api/zones/',
                 'weather': '/api/weather/',
+                'siata_weather': '/api/siata_weather/',
                 'congestion_prediction': '/api/congestion_prediction/',
                 'simulate_rain': '/api/simulate_rain/',
             },
@@ -435,6 +436,73 @@ class WeatherStatusView(APIView):
                 'condition': 'Clima real no disponible',
                 'temperature': 22,
                 'isRaining': RAIN_STATE['isRaining'],
+                'source': 'fallback',
+                'detail': str(exc),
+            })
+
+
+class SiataWeatherView(APIView):
+    def get(self, request):
+        endpoint = os.environ.get('SIATA_WEATHER_API_URL')
+        api_key = os.environ.get('SIATA_API_KEY')
+
+        if not endpoint:
+            return Response({
+                'location': 'Medellín, CO',
+                'condition': 'SIATA no configurado',
+                'temperature': 22,
+                'humidity': None,
+                'wind_speed': None,
+                'source': 'simulated',
+            })
+
+        try:
+            import requests
+
+            headers = {}
+            if api_key:
+                headers['Authorization'] = f'Bearer {api_key}'
+
+            response = requests.get(endpoint, headers=headers, timeout=8)
+            response.raise_for_status()
+            payload = response.json()
+
+            data = payload.get('data') or payload.get('observations') or payload
+            if isinstance(data, list):
+                data = data[0] if data else {}
+
+            temperature = (
+                data.get('temperature')
+                or data.get('temp')
+                or data.get('temperatura')
+                or data.get('temperature_c')
+            )
+            humidity = data.get('humidity') or data.get('humedad')
+            wind_speed = data.get('windSpeed') or data.get('wind_speed') or data.get('velocidad_viento')
+            condition = (
+                data.get('weather')
+                or data.get('condition')
+                or data.get('description')
+                or data.get('estado')
+                or 'Condición no disponible'
+            )
+            location = data.get('location') or data.get('stationName') or 'Medellín, CO'
+
+            return Response({
+                'location': location,
+                'condition': condition,
+                'temperature': temperature,
+                'humidity': humidity,
+                'wind_speed': wind_speed,
+                'source': 'siata',
+            })
+        except Exception as exc:
+            return Response({
+                'location': 'Medellín, CO',
+                'condition': 'Clima SIATA no disponible',
+                'temperature': 22,
+                'humidity': None,
+                'wind_speed': None,
                 'source': 'fallback',
                 'detail': str(exc),
             })

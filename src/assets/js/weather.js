@@ -1,37 +1,73 @@
+const SIATA_BASE_URL = 'https://siata.gov.co/data/scroll'
+
 const FALLBACK_WEATHER = {
-  source: 'simulated',
+  source: 'siata-fallback',
   location: 'Medellín, CO',
-  condition: 'Nublado parcial',
+  condition: 'Monitoreo SIATA no disponible',
   temperature: 22,
   rainAlert: false,
+  rainfallForecast: null,
+  updatedAt: null,
 }
 
 export async function getWeatherData() {
-  const apiKey = import.meta.env.VITE_OPENWEATHER_API_KEY
-
-  if (!apiKey) {
-    return FALLBACK_WEATHER
-  }
-
   try {
-    const url = `https://api.openweathermap.org/data/2.5/weather?q=Medellin,CO&units=metric&lang=es&appid=${apiKey}`
-    const response = await fetch(url)
+    const [temperatureResponse, precipitationResponse] = await Promise.all([
+      fetch(`${SIATA_BASE_URL}/temperatura2.json`, { cache: 'no-store' }),
+      fetch(`${SIATA_BASE_URL}/pronosticoPPT.json`, { cache: 'no-store' }),
+    ])
 
-    if (!response.ok) {
-      throw new Error('Weather API request failed')
+    if (!temperatureResponse.ok || !precipitationResponse.ok) {
+      throw new Error('SIATA weather request failed')
     }
 
-    const weather = await response.json()
-    const weatherMain = weather.weather?.[0]?.main?.toLowerCase() || ''
+    const temperaturePayload = await temperatureResponse.json()
+    const precipitationPayload = await precipitationResponse.json()
+    const normalizedTemperature = normalizeTemperature(temperaturePayload)
+    const normalizedRain = normalizeRainForecast(precipitationPayload)
 
     return {
-      source: 'openweathermap',
-      location: weather.name ? `${weather.name}, CO` : 'Medellín, CO',
-      condition: weather.weather?.[0]?.description || 'Sin datos',
-      temperature: Math.round(weather.main?.temp ?? 0),
-      rainAlert: weatherMain.includes('rain') || weatherMain.includes('drizzle') || weatherMain.includes('thunderstorm'),
+      source: 'siata',
+      location: 'Medellín, Valle de Aburrá',
+      condition: normalizedRain.rainAlert ? 'Probabilidad de lluvia SIATA' : 'Condición estable SIATA',
+      temperature: normalizedTemperature.temperature ?? FALLBACK_WEATHER.temperature,
+      rainAlert: normalizedRain.rainAlert,
+      rainfallForecast: normalizedRain.value,
+      updatedAt: normalizedTemperature.updatedAt || normalizedRain.updatedAt || new Date().toISOString(),
     }
   } catch {
     return FALLBACK_WEATHER
   }
+}
+
+function normalizeTemperature(payload) {
+  const candidates = flattenNumbers(payload)
+  const plausible = candidates.find((value) => value > 5 && value < 40)
+
+  return {
+    temperature: Number.isFinite(plausible) ? Math.round(plausible) : null,
+    updatedAt: payload?.fecha || payload?.updatedAt || payload?.date || null,
+  }
+}
+
+function normalizeRainForecast(payload) {
+  const candidates = flattenNumbers(payload)
+  const value = candidates.find((item) => item >= 0 && item <= 100) ?? null
+
+  return {
+    value,
+    rainAlert: Number.isFinite(value) ? value >= 45 : false,
+    updatedAt: payload?.fecha || payload?.updatedAt || payload?.date || null,
+  }
+}
+
+function flattenNumbers(value) {
+  if (typeof value === 'number') return [value]
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(',', '.'))
+    return Number.isFinite(parsed) ? [parsed] : []
+  }
+  if (Array.isArray(value)) return value.flatMap(flattenNumbers)
+  if (value && typeof value === 'object') return Object.values(value).flatMap(flattenNumbers)
+  return []
 }
