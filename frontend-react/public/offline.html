@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UrbanLytics - Sin Conexión</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #0A2540 0%, #00B4D8 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .offline-container {
+      background: white;
+      border-radius: 24px;
+      padding: 48px;
+      max-width: 600px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    }
+
+    .icon {
+      font-size: 80px;
+      margin-bottom: 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
+    }
+
+    h1 {
+      font-size: 32px;
+      font-weight: 800;
+      color: #0A2540;
+      margin-bottom: 16px;
+      font-family: 'Space Grotesk', sans-serif;
+    }
+
+    p {
+      font-size: 16px;
+      color: #64748B;
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .features {
+      background: #F8FAFC;
+      border-radius: 16px;
+      padding: 24px;
+      margin-bottom: 32px;
+      text-align: left;
+    }
+
+    .features h3 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #0A2540;
+      margin-bottom: 16px;
+    }
+
+    .feature-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 0;
+      border-bottom: 1px solid #E2E8F0;
+    }
+
+    .feature-item:last-child {
+      border-bottom: none;
+    }
+
+    .feature-icon {
+      font-size: 24px;
+    }
+
+    .feature-text {
+      flex: 1;
+    }
+
+    .feature-text strong {
+      display: block;
+      font-size: 14px;
+      color: #0A2540;
+      margin-bottom: 4px;
+    }
+
+    .feature-text span {
+      font-size: 13px;
+      color: #64748B;
+    }
+
+    .btn-retry {
+      background: #00B4D8;
+      color: white;
+      border: none;
+      padding: 16px 48px;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-family: inherit;
+    }
+
+    .btn-retry:hover {
+      background: #0096B3;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 180, 216, 0.4);
+    }
+
+    .btn-retry:active {
+      transform: translateY(0);
+    }
+
+    .status {
+      margin-top: 24px;
+      font-size: 14px;
+      color: #94A3B8;
+    }
+
+    .cached-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #00D26A;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 16px;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid white;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="offline-container">
+    <div class="icon">📡</div>
+    <h1>Sin Conexión a Internet</h1>
+    <p>
+      Parece que has perdido la conexión. No te preocupes, UrbanLytics puede funcionar 
+      parcialmente sin internet gracias a su modo offline.
+    </p>
+
+    <div class="features">
+      <h3>📱 Funcionalidades Disponibles Offline</h3>
+      
+      <div class="feature-item">
+        <div class="feature-icon">🗺️</div>
+        <div class="feature-text">
+          <strong>Mapa en Caché</strong>
+          <span>Últimos datos de tráfico y accidentes almacenados</span>
+        </div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon">📢</div>
+        <div class="feature-text">
+          <strong>Crear Reportes</strong>
+          <span>Los reportes se sincronizarán cuando vuelvas a estar conectado</span>
+        </div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon">📊</div>
+        <div class="feature-text">
+          <strong>Dashboard Local</strong>
+          <span>Visualiza estadísticas de tu sesión anterior</span>
+        </div>
+      </div>
+
+      <div class="feature-item">
+        <div class="feature-icon">🧭</div>
+        <div class="feature-text">
+          <strong>GPS Activo</strong>
+          <span>Tu ubicación sigue funcionando sin internet</span>
+        </div>
+      </div>
+    </div>
+
+    <button class="btn-retry" onclick="window.location.reload()">
+      🔄 Reintentar Conexión
+    </button>
+
+    <div class="status">
+      <div id="connection-status">
+        Verificando conexión...
+      </div>
+      
+      <div class="cached-badge">
+        <span class="spinner"></span>
+        <span id="cached-count">Cargando datos en caché...</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Check connection status
+    function updateConnectionStatus() {
+      const statusEl = document.getElementById('connection-status')
+      const cachedEl = document.getElementById('cached-count')
+      
+      if (navigator.onLine) {
+        statusEl.innerHTML = '✅ ¡Conexión restaurada! Redirigiendo...'
+        setTimeout(() => window.location.href = '/', 1500)
+      } else {
+        statusEl.innerHTML = '❌ Sin conexión. Mostrando datos en caché.'
+      }
+
+      // Count cached items
+      let cachedCount = 0
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)
+        if (key.startsWith('urbanlytics-')) {
+          cachedCount++
+        }
+      }
+      
+      cachedEl.textContent = `${cachedCount} elementos en caché`
+    }
+
+    // Listen for online/offline events
+    window.addEventListener('online', updateConnectionStatus)
+    window.addEventListener('offline', updateConnectionStatus)
+    
+    // Initial check
+    updateConnectionStatus()
+
+    // Check every 5 seconds
+    setInterval(updateConnectionStatus, 5000)
+  </script>
+</body>
+</html>

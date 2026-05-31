@@ -1,0 +1,39 @@
+# ==============================================================================
+# MEDELLÍN MOVILIDATA OS - REQUISITOS DEL SISTEMA Y DEPENDENCIAS
+# ==============================================================================
+# Este archivo detalla las versiones de las tecnologías principales utilizadas
+# y requeridas en el proyecto (Backend, Frontend, Base de Datos y Entorno).
+
+# ------------------------------------------------------------------------------
+# 1. Backend (Django / Python)
+# ------------------------------------------------------------------------------
+# Framework principal de desarrollo del backend.
+Django>=5.1,<6.0
+djangorestframework>=3.15,<4.0
+django-cors-headers>=4.6,<5.0
+
+# Driver/Conector de base de datos MySQL para Python.
+#mysqlclient==2.2.4
+#mysqlclient>=2.2,<3.0
+
+requests>=2.32,<3.0
+scikit-learn>=1.5,<2.0
+
+# ------------------------------------------------------------------------------
+# 2. Frontend (Vue.js)
+# ------------------------------------------------------------------------------
+# Nota: La dependencia de Vue se gestiona principalmente a través de npm (ver package.json).
+# Versión de Vue.js: ^3.5.34
+# Comando para instalar dependencias de frontend: npm install
+
+# ------------------------------------------------------------------------------
+# 3. Base de Datos (MySQL)
+# ------------------------------------------------------------------------------
+# Sistema de gestión de bases de datos relacionales.
+# Versión recomendada: MySQL Server 8.0.x (o MariaDB 10.4.x equivalente)
+
+# ------------------------------------------------------------------------------
+# 4. Entorno de Desarrollo Local (XAMPP)
+# ------------------------------------------------------------------------------
+# Servidor web local que provee Apache, MySQL/MariaDB y PHP de manera unificada.
+# Versión recomendada: XAMPP 8.2.12 (con PHP 8.2)
