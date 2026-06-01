@@ -1,354 +1,759 @@
-# 🚦 Medellín Movilidata OS
+# 🏙️ UrbanLytics
 
-## Movilidad inteligente impulsada por datos en tiempo real.
+## Plataforma Inteligente de Movilidad Urbana para Medellín
 
----
-
-# 1. Nombre del Producto
-
-# Medellín Movilidata OS
+Proyecto desarrollado para el **HackData CTGI SENA 2026**.
 
 ---
 
-# 2. Naming Estratégico
+## 📌 Tabla de Contenido
 
-## Significado
-
-**MoviliData** surge de la unión de:
-
-- **Movili** → Movilidad  
-- **Data** → Datos  
-- **OS** → Operating System *(Sistema Operativo)*  
-
-La marca representa una plataforma inteligente que integra datos de:
-
-- tráfico
-- movilidad
-- clima
-- seguridad vial
-
-para mejorar la experiencia de desplazamiento de los ciudadanos de Medellín.
-
----
-
-## Slogan Principal
-
-> **"Movilidad inteligente impulsada por datos en tiempo real."**
-
-### Slogans Alternativos
-
-- Conduce informado, llega seguro.
-- Tu ciudad conectada en tiempo real.
-- Datos que transforman cada recorrido.
-- La inteligencia detrás de la movilidad.
+1. Introducción
+2. Descripción del Proyecto
+3. Problemática
+4. Objetivos
+5. Alcance del Proyecto
+6. Público Objetivo
+7. Funcionalidades Principales
+8. Arquitectura del Sistema
+9. Tecnologías Utilizadas
+10. APIs y Fuentes de Datos
+11. Estructura del Proyecto
+12. Base de Datos
+13. UX/UI y Experiencia de Usuario
+14. Branding e Identidad Visual
+15. Manual Técnico
+16. Manual de Usuario
+17. Funcionalidades PWA
+18. Seguridad y Buenas Prácticas
+19. Roadmap del Proyecto
+20. Posibles Mejoras Futuras
+21. Pitch del Proyecto
+22. Integrantes y Roles
+23. Instalación y Ejecución
+24. Deploy
+25. Evidencias Visuales
+26. Conclusiones
 
 ---
 
-# 3. Concepto de Marca
+# 1. 📖 Introducción
 
-**Medellín Movilidata OS** es una plataforma digital diseñada para centralizar información de:
+**UrbanLytics** es una plataforma web inteligente enfocada en movilidad urbana, monitoreo vial y visualización geoespacial para la ciudad de Medellín.
 
-- tráfico
-- clima
-- seguridad vial
-- reportes ciudadanos
+El sistema integra:
 
-en una sola herramienta interactiva.
+- Tráfico en tiempo real.
+- Datos climáticos.
+- Reportes ciudadanos.
+- Análisis de accidentalidad.
+- Mapas interactivos.
+- Visualización analítica.
+- Predicción de congestión.
+- Rutas inteligentes.
 
-## La marca busca transmitir:
+La plataforma busca convertirse en una herramienta de apoyo para conductores, repartidores y ciudadanos, permitiendo tomar decisiones más seguras y eficientes durante sus desplazamientos.
 
-- Innovación
-- Tecnología
-- Inteligencia Artificial
-- Seguridad
-- Precisión
-- Confianza
-- Movilidad sostenible
+> **Tagline**: *"La ciudad que se ve en datos"*
 
 ---
 
-## Inspiración Visual
+## 📋 Resumen Técnico Rápido
 
-La identidad visual se inspira en:
-
-- Mapas inteligentes
-- Redes de datos
-- Sistemas de navegación
-- Centros de control de tráfico
-- Smart Cities *(Ciudades Inteligentes)*
-
----
-
-# 4. Diseño del Logotipo
-
-## Concepto Visual
-
-El logotipo integra tres elementos principales:
-
-### 📍 Elemento 1 — Pin de ubicación GPS
-
-Representa:
-
-- Geolocalización
-- Posicionamiento
-- Movilidad
+| Capa | Tecnología |
+|------|-----------|
+| **Frontend** | Vue 3 + Vite + Bootstrap 5 + Leaflet + Chart.js + PWA |
+| **Backend** | Django 5 + DRF + scikit-learn |
+| **Database** | SQLite (dev) / MySQL 8 (prod) |
+| **APIs externas** | OpenWeatherMap, TomTom Traffic |
+| **Auth** | DRF Token Authentication |
+| **Formatos** | REST JSON, GeoJSON |
 
 ---
 
-### 🔗 Elemento 2 — Líneas de conexión
 
-Representa:
 
-- Datos
-- Inteligencia Artificial
-- Conectividad
+# 2. 🌍 Descripción del Proyecto
 
----
+**UrbanLytics** funciona como una plataforma de movilidad inteligente inspirada en sistemas como:
 
-### 🛣️ Elemento 3 — Carretera o ruta
+- Waze
+- Google Maps
+- Didi Repartidor
+- OpenWeatherMap API
 
-Representa:
+El sistema permite visualizar información en tiempo real relacionada con:
 
-- Tráfico
-- Movilidad
-- Navegación
+- Congestión vehicular.
+- Accidentes.
+- Lluvias.
+- Derrumbes.
+- Construcciones viales.
+- Rutas alternas.
+- Zonas de alta peligrosidad.
 
----
-
-## Construcción Conceptual
-
-### Símbolo
-
-**Pin GPS + carretera + red de datos**
-
-### Texto principal
-
-**MOVILIDATA OS**
-
-### Versión secundaria
-
-**MEDELLÍN MOVILIDATA OS**
+Toda la información es presentada mediante un mapa interactivo dinámico con capas de datos geográficos.
 
 ---
 
-# 5. Paleta Cromática
+# 3. ⚠️ Problemática
 
-## 🔵 Color Primario — Azul Tecnológico
+Medellín enfrenta múltiples problemas relacionados con movilidad urbana:
 
-**HEX:** `#0066FF`  
-**RGB:** `0, 102, 255`
+- Alta congestión vehicular.
+- Accidentes frecuentes.
+- Poca visualización preventiva de riesgos.
+- Inundaciones y derrumbes durante temporadas de lluvia.
+- Falta de integración entre datos climáticos y tráfico.
+- Dificultad para encontrar rutas seguras y eficientes.
+- Ausencia de sistemas colaborativos de reportes ciudadanos.
 
-### Uso
+Actualmente los usuarios deben utilizar múltiples plataformas para obtener información fragmentada.
 
-- Botones principales
-- Enlaces
-- Elementos interactivos
-
----
-
-## 🌑 Color Secundario — Azul Oscuro
-
-**HEX:** `#0B1F3A`  
-**RGB:** `11, 31, 58`
-
-### Uso
-
-- Fondos
-- Navbar
-- Dashboard
+**UrbanLytics** busca centralizar toda esta información en una única plataforma inteligente.
 
 ---
 
-## 🟢 Color Éxito — Verde Movilidad
+# 4. 🎯 Objetivos
 
-**HEX:** `#00C853`
+## Objetivo General
 
-### Uso
+Desarrollar una plataforma web inteligente que permita monitorear el estado de las vías de Medellín en tiempo real utilizando datos geográficos, climáticos y ciudadanos.
 
-- Tráfico fluido
-- Confirmaciones
-- Indicadores positivos
+## Objetivos Específicos
 
----
-
-## 🟡 Color Advertencia — Amarillo Inteligente
-
-**HEX:** `#FFC107`
-
-### Uso
-
-- Tráfico moderado
-- Alertas preventivas
+- Visualizar tráfico en tiempo real.
+- Mostrar rutas alternas inteligentes.
+- Identificar zonas peligrosas.
+- Integrar datos climáticos mediante OpenWeatherMap API.
+- Permitir reportes ciudadanos.
+- Crear mapas interactivos dinámicos.
+- Implementar funcionalidades PWA.
+- Mejorar la seguridad vial.
+- Optimizar tiempos de desplazamiento.
 
 ---
 
-## 🔴 Color Riesgo — Rojo Alerta
+# 5. 📐 Alcance del Proyecto
 
-**HEX:** `#FF3B30`
+El proyecto cubre:
 
-### Uso
+- Visualización de mapas de Medellín.
+- Monitoreo vial.
+- Reportes ciudadanos.
+- Datos climáticos.
+- Estadísticas de accidentalidad.
+- Visualización geográfica.
+- Dashboard analítico.
+- Sistema responsive.
+- Plataforma PWA.
 
-- Congestión
-- Accidentes
-- Zonas peligrosas
-
----
-
-## ⚪ Color Complementario — Gris Claro
-
-**HEX:** `#F4F6F9`
-
-### Uso
-
-- Tarjetas
-- Fondos secundarios
-- Paneles
+El sistema está orientado inicialmente para Medellín y el área metropolitana.
 
 ---
 
-# 6. Tipografía Corporativa
+# 6. 👥 Público Objetivo
 
-## Tipografía Principal — Poppins
+**UrbanLytics** está dirigido a:
 
-### Uso
-
-- Títulos
-- Menús
-- Dashboard
-
-### Características
-
-- Moderna
-- Tecnológica
-- Limpia
-- Profesional
+- Conductores.
+- Repartidores.
+- Empresas logísticas.
+- Motociclistas.
+- Ciudadanos.
+- Servicios de movilidad.
+- Empresas de transporte.
+- Entidades gubernamentales.
 
 ---
 
-## Tipografía Secundaria — Inter
+# 7. 🧠 Funcionalidades Principales
 
-### Uso
+## 🚗 Tráfico en Tiempo Real
 
-- Textos
-- Formularios
-- Contenido general
+La plataforma permite visualizar:
 
-### Características
+- Flujo vehicular.
+- Congestión.
+- Velocidad promedio.
+- Vías críticas.
 
-- Alta legibilidad
-- Excelente para aplicaciones web
+**Visualización:**
+- 🟢 Verde → tráfico fluido.
+- 🟡 Amarillo → tráfico moderado.
+- 🔴 Rojo → congestión alta.
 
----
+## 🛣️ Rutas Inteligentes
 
-# 7. Personalidad de Marca
+El sistema calcula rutas alternativas considerando:
 
-La marca debe proyectar:
+- Tráfico.
+- Accidentes.
+- Lluvia.
+- Calles cerradas.
+- Construcciones.
 
-## Innovadora
-Uso de tecnología avanzada.
+## 🌧️ Integración Climática
 
-## Inteligente
-Análisis basado en datos.
+Integración con datos climáticos de OpenWeatherMap API:
 
-## Confiable
-Información precisa y actualizada.
+- Intensidad de lluvia.
+- Niveles de precipitación.
+- Alertas climáticas.
+- Riesgo de inundación.
 
-## Cercana
-Pensada para ciudadanos y conductores.
+## ⚠️ Zonas de Peligrosidad
 
-## Profesional
-Aspecto corporativo tipo startup tecnológica.
+Visualización de:
 
----
+- Accidentes históricos.
+- Mortalidad vial.
+- Zonas de alto riesgo.
+- Derrumbes.
 
-# 8. Aplicación de la Identidad Visual
+Se utilizan:
 
-## Dashboard
+- Heatmaps.
+- Capas geográficas.
+- Marcadores dinámicos.
 
-- Fondo azul oscuro
-- Tarjetas blancas
-- Gráficas modernas
-- Indicadores de tráfico por colores
+## 📢 Reportes Ciudadanos
 
----
+Los usuarios pueden reportar:
 
-## Mapa
+- Accidentes.
+- Policías de tránsito.
+- Derrumbes.
+- Calles cerradas.
+- Construcciones.
+- Inundaciones.
 
-### Código visual del tráfico:
+Cada reporte contiene:
 
-- 🟢 Verde → Tráfico fluido
-- 🟡 Amarillo → Tráfico moderado
-- 🟠 Naranja → Tráfico pesado
-- 🔴 Rojo → Congestión crítica
-- 🔵 Azul → Precipitación
+- Ubicación.
+- Tipo de incidente.
+- Fecha y hora.
+- Nivel de gravedad.
 
----
+## 📊 Dashboard Analítico
 
-## Botones
+El sistema incluye:
 
-### Primario
-`#0066FF`
-
-### Secundario
-`#0B1F3A`
-
-### Éxito
-`#00C853`
-
----
-
-# 9. Uso Correcto del Logotipo
-
-## Permitido ✅
-
-- Fondo blanco
-- Fondo azul oscuro
-- Escala proporcional
-- Versión monocromática
+- Gráficas estadísticas.
+- Indicadores.
+- Heatmaps.
+- Mapas interactivos.
+- Reportes históricos.
 
 ---
 
-## No permitido ❌
+# 8. 🏗️ Arquitectura del Sistema
 
-- Cambiar colores oficiales
-- Deformar el logotipo
-- Rotarlo
-- Agregar efectos excesivos
-- Alterar la tipografía
+## Arquitectura General
+
+```
+Frontend (Vue 3)
+        ↓
+   API REST (Django)
+        ↓
+  Base de Datos (SQLite dev / MySQL 8 prod)
+        ↓
+Servicios Externos y APIs
+```
+
+## Componentes
+
+### Frontend
+
+Responsable de:
+
+- Interfaces.
+- Mapas.
+- Visualización.
+- UX/UI.
+
+### Backend
+
+Responsable de:
+
+- APIs.
+- Procesamiento de datos.
+- Lógica de negocio.
+- Integración externa.
+
+### Base de Datos
+
+Almacenamiento de:
+
+- Reportes.
+- Usuarios.
+- Historial.
+- Datos procesados.
 
 ---
 
-# 10. Identidad Visual Aplicada
+# 9. 💻 Tecnologías Utilizadas
 
-La identidad visual deberá mantenerse consistente en:
+## Frontend
 
-- Plataforma web
-- Dashboard
-- Video promocional
-- Presentación ejecutiva
-- Pitch
+- Vue 3 (^3.5.34)
+- Vite (^8.0.12)
+- Bootstrap 5 (^5.3.8)
+- Leaflet (^1.9.4)
+- leaflet.heat (^0.2.0)
+- Chart.js (^4.5.1)
+- vite-plugin-pwa (^1.3.0)
+- Axios
+- TomTom Traffic Flow API
+- OpenWeatherMap API
+- Vue Composition API (ref/reactive)
+- CSS3 custom properties (Design system)
+- SVG (iconografía sidebar)
+- GeoJSON (polígonos zonas de riesgo)
+
+## Backend
+
+- Python
+- Django
+- Django REST Framework (DRF)
+- django-cors-headers
+- Django ORM (incluido)
+
+## Base de Datos
+
+- SQLite (desarrollo)
+- MySQL 8.0 (producción)
+
+## Visualización
+
+- Leaflet Heat
+- Chart.js
+- Plotly
+
+## DevOps y Deploy
+
 - GitHub
-- README
-- Material publicitario
-- Redes sociales
+- Vercel / Netlify (frontend)
+- Render / PythonAnywhere (backend)
 
 ---
 
-# 🎯 Resultado Esperado
+# 10. 🌐 APIs y Fuentes de Datos
 
-**Medellín Movilidata OS** debe proyectar la imagen de una **startup tecnológica especializada en movilidad inteligente**, capaz de integrar datos en tiempo real para:
+## APIs Utilizadas
 
-- mejorar la seguridad vial
-- optimizar rutas
-- transformar la experiencia de desplazamiento
-- aportar al desarrollo de una ciudad inteligente en Medellín
+### OpenWeatherMap API
+Datos climáticos y precipitación.
+
+### TomTom Traffic Flow API
+Geolocalización y rutas.
+
+### OpenStreetMap
+Visualización cartográfica.
+
+### Datos Abiertos Medellín
+Información vial y accidentalidad.
+
+### Datos.gov.co
+Datasets públicos.
+
+## Fuentes de Datos
+
+- [Medellín.gov.co](https://www.medellin.gov.co/)
+- [Datos.gov.co](https://www.datos.gov.co/)
+- [OpenWeatherMap API](https://siata.gov.co/)
+- [Google Maps Platform](https://cloud.google.com/maps-platform)
 
 ---
 
-## 🚀 Visión del Proyecto
+# 11. 📂 Estructura del Proyecto
 
-Construir una plataforma que convierta los datos urbanos en decisiones inteligentes para mejorar la movilidad de Medellín.
+```
+urbanlytics/
+│
+├── frontend/
+├── backend/
+├── docs/
+├── assets/
+│   └── branding/
+│       ├── logo/
+│       ├── colors/
+│       ├── typography/
+│       └── icons/
+├── screenshots/
+├── public/
+├── components/
+├── services/
+├── data/
+├── README.md
+├── package.json (Vue 3.5.34, Vite 8.0.12, Bootstrap 5.3.8, Leaflet 1.9.4, leaflet.heat 0.2.0, Chart.js 4.5.1, vite-plugin-pwa 1.3.0)
+└── requirements.txt (Django 5.1, DRF 3.15, django-cors-headers 4.6, mysqlclient 2.2.4, scikit-learn 1.5)
+```
 
 ---
 
-## 💡 Tecnología + Datos + Movilidad = Medellín Movilidata OS
+# 12. 🗄️ Base de Datos
+
+## Tablas Principales
+
+### usuarios
+
+| Campo      | Tipo      |
+|------------|-----------|
+| id         | integer   |
+| nombre     | varchar   |
+| correo     | varchar   |
+| contraseña | varchar   |
+
+### reportes
+
+| Campo       | Tipo      |
+|-------------|-----------|
+| id          | integer   |
+| tipo        | varchar   |
+| descripcion | text      |
+| latitud     | float     |
+| longitud    | float     |
+| fecha       | datetime  |
+
+### incidentes
+
+| Campo       | Tipo      |
+|-------------|-----------|
+| id          | integer   |
+| categoria   | varchar   |
+| nivel_riesgo| integer   |
+| zona        | varchar   |
+
+---
+
+# 13. 🎨 UX/UI y Experiencia de Usuario
+
+## Principios UX
+
+- Simplicidad.
+- Accesibilidad.
+- Rapidez.
+- Diseño responsive.
+- Navegación intuitiva.
+
+## Diseño Visual
+
+Inspirado en:
+
+- Tesla.
+- Google Maps.
+- Waze.
+- Uber.
+
+## Componentes Visuales
+
+- Sidebar interactivo.
+- Dashboard moderno.
+- Tarjetas estadísticas.
+- Heatmaps.
+- Mapas dinámicos.
+- Alertas visuales.
+
+---
+
+# 14. 🎨 Branding e Identidad Visual
+
+## Nombre de Marca
+
+**UrbanLytics**
+
+> Urban (Urbano) + Analytics (Analítica)
+
+## Slogan / Tagline
+
+> *"La ciudad que se ve en datos"*
+
+## Concepto de Marca
+
+Plataforma de inteligencia urbana que transforma datos complejos de movilidad en decisiones claras. Representa la intersección entre la ciudad y la analítica de datos.
+
+## Paleta de Colores Oficial
+
+| Uso                | Nombre          | HEX       |
+|--------------------|-----------------|-----------|
+| Fondos oscuros     | Urban Blue      | #0A2540   |
+| CTAs, acentos, éxito| Data Green     | #00D26A   |
+| Fondos claros      | Cloud White     | #F6F9FC   |
+| Alertas, congestión| Alert Amber     | #FFB800   |
+| Zonas críticas     | Danger Red      | #E63946   |
+| Mapas, tiempo real | Tech Cyan       | #00B4D8   |
+| Predicciones, IA   | Insight Purple  | #7B2CBF   |
+
+## Tipografía
+
+- **Principal**: Inter (títulos, UI, dashboards)
+- **Secundaria**: Space Grotesk (datos, números, métricas)
+- **Marca**: Montserrat Bold (logo)
+
+## Personalidad de Marca
+
+- Inteligente: Basada en datos, IA y predicciones.
+- Confiable: Segura, precisa, profesional.
+- Moderna: Tecnológica, innovadora, ágil.
+- Humana: Accesible, clara, orientada al ciudadano.
+- Dinámica: En movimiento, en constante evolución.
+
+## Valores
+
+1. Precisión analítica.
+2. Accesibilidad urbana.
+3. Innovación constante.
+4. Seguridad vial.
+5. Sostenibilidad.
+
+---
+
+# 15. 🛠️ Manual Técnico
+
+## Funcionamiento General
+
+1. El usuario accede al sistema.
+2. El frontend carga el mapa.
+3. El backend consulta APIs externas.
+4. Los datos son procesados.
+5. El sistema actualiza el mapa.
+6. Se muestran rutas y alertas.
+
+## Flujo de Datos
+
+```
+Usuario → Frontend → API → Procesamiento → Base de Datos → Visualización
+```
+
+## Integración de APIs
+
+El backend consume:
+
+- APIs climáticas.
+- APIs geográficas.
+- Datos abiertos.
+- Servicios de tráfico.
+
+---
+
+# 16. 👨‍💻 Manual de Usuario
+
+## Inicio
+
+El usuario accede a la plataforma desde navegador web.
+
+## Navegación
+
+El usuario puede:
+
+- Explorar el mapa.
+- Consultar tráfico.
+- Ver lluvia.
+- Reportar incidentes.
+- Consultar zonas peligrosas.
+
+## Crear Reportes
+
+Pasos:
+
+1. Abrir menú de reportes.
+2. Seleccionar incidente.
+3. Compartir ubicación.
+4. Enviar reporte.
+
+## Consultar Rutas
+
+El usuario:
+
+1. Selecciona origen.
+2. Selecciona destino.
+3. El sistema calcula rutas óptimas.
+
+---
+
+# 17. 📱 Funcionalidades PWA
+
+## Características
+
+- Instalación en móvil.
+- Funcionamiento offline.
+- Caché inteligente.
+- Responsive Design.
+
+## Archivos PWA
+
+### manifest.json
+
+Contiene:
+
+- Nombre app: **UrbanLytics**.
+- Iconos.
+- Tema.
+- Configuración instalación.
+
+### service-worker.js
+
+Responsable de:
+
+- Caché.
+- Offline mode.
+- Optimización.
+
+---
+
+# 18. 🔒 Seguridad y Buenas Prácticas
+
+## Seguridad
+
+- Validación de datos.
+- Sanitización.
+- HTTPS.
+- Protección APIs.
+- Manejo seguro de rutas.
+
+## Buenas Prácticas
+
+- Código modular.
+- Commits descriptivos.
+- Componentización.
+- Documentación clara.
+- Arquitectura escalable.
+
+---
+
+# 19. 🚀 Roadmap del Proyecto
+
+## Fase 1
+
+- Diseño UI.
+- Branding.
+- Mapa base.
+
+## Fase 2
+
+- Integración APIs.
+- Dashboard.
+- Reportes.
+
+## Fase 3
+
+- IA.
+- Predicción.
+- Optimización.
+
+---
+
+# 20. 🔮 Posibles Mejoras Futuras
+
+- Machine Learning avanzado.
+- Predicción automática de accidentes.
+- Sistema de reputación de usuarios.
+- Alertas push.
+- Aplicación móvil nativa.
+- Reconocimiento visual.
+- Integración IoT.
+
+---
+
+# 21. 🎤 Pitch del Proyecto
+
+## Problema
+
+Medellín enfrenta problemas de congestión, accidentalidad y desinformación vial.
+
+## Solución
+
+**UrbanLytics** integra tráfico, clima y reportes ciudadanos en una plataforma inteligente.
+
+## Diferencial
+
+- Datos climáticos.
+- IA.
+- Mapas interactivos.
+- Reportes colaborativos.
+- Predicción vial.
+
+## Impacto
+
+- Mejor movilidad.
+- Menos accidentes.
+- Optimización de rutas.
+- Información en tiempo real.
+
+---
+
+# 22. 👨‍👩‍👧‍👦 Integrantes y Roles
+
+| Rol                        | Responsabilidad         |
+|----------------------------|-------------------------|
+| Backend Developer          | APIs y lógica           |
+| Frontend Developer         | Interfaces y mapas      |
+| UX/UI Designer             | Experiencia visual      |
+| Diseñador Audiovisual & Branding | Marca y pitch     |
+
+---
+
+# 23. ⚙️ Instalación y Ejecución
+
+## Clonar repositorio
+
+```bash
+git clone https://github.com/usuario/urbanlytics
+cd urbanlytics
+```
+
+## Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## Backend
+
+```bash
+cd backend
+pip install -r requirements.txt (Django 5.1, DRF 3.15, django-cors-headers 4.6, mysqlclient 2.2.4, scikit-learn 1.5)
+uvicorn main:app --reload
+```
+
+---
+
+# 24. 🌐 Deploy
+
+## Plataformas sugeridas
+
+- Vercel.
+- Netlify.
+- Render.
+- GitHub Pages.
+
+---
+
+# 25. 🖼️ Evidencias Visuales
+
+## Capturas necesarias
+
+- Dashboard.
+- Heatmaps.
+- Reportes.
+- Vista móvil.
+- Gráficas.
+- Mapas.
+
+---
+
+# 26. ✅ Conclusiones
+
+**UrbanLytics** busca transformar la movilidad urbana de Medellín mediante una plataforma inteligente basada en datos, geolocalización e inteligencia artificial.
+
+La solución integra tecnología, experiencia de usuario y analítica avanzada para ofrecer información vial en tiempo real, mejorar la seguridad de los ciudadanos y optimizar los desplazamientos dentro de la ciudad.
+
+El proyecto representa una propuesta moderna, escalable y alineada con tendencias actuales de Smart Cities y movilidad inteligente.
+
+---
+
+*© 2026 UrbanLytics — HackData CTGI SENA — Medellín, Colombia*
+*"La ciudad que se ve en datos"*
