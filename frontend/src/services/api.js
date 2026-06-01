@@ -174,3 +174,21 @@ export function deleteAdminUser(token, id) {
     method: 'DELETE',
   })
 }
+
+export function analyzeTraffic(startCoords, endCoords) {
+  return requestJson('/traffic_analysis/', {
+    method: 'POST',
+    body: JSON.stringify({
+      start: startCoords,
+      end: endCoords,
+    }),
+  })
+}
+
+export function fetchWeatherHistory() {
+  return requestJson('/weather/history/')
+}
+
+export function fetchZonesWithData() {
+  return requestJson('/zones/')
+}

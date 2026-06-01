@@ -39,11 +39,25 @@ class Zone(models.Model):
 
 
 class WeatherRecord(models.Model):
+    SOURCE_CHOICES = [
+        ('openweathermap', 'OpenWeatherMap'),
+        ('simulated', 'Simulated'),
+        ('forecast', 'Forecast'),
+    ]
+
     location = models.CharField(max_length=120, default='Medellín, CO')
     condition = models.CharField(max_length=120)
     temperature = models.FloatField()
+    humidity = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(100)])
+    pressure = models.IntegerField(default=1013)
+    wind_speed = models.FloatField(default=0)
     is_raining = models.BooleanField(default=False)
-    recorded_at = models.DateTimeField(auto_now_add=True)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default='simulated')
+    recorded_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
         ordering = ['-recorded_at']
+        indexes = [
+            models.Index(fields=['-recorded_at']),
+            models.Index(fields=['location', '-recorded_at']),
+        ]

@@ -1,7 +1,10 @@
+from datetime import datetime
+
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Accident, Zone
+from .prediction import weighted_prediction
 from .serializers import AccidentSerializer, ZoneSerializer
 
 RAIN_STATE = {'isRaining': False}
@@ -47,3 +50,45 @@ class WeatherSimView(APIView):
             else:
                 RAIN_STATE['isRaining'] = bool(raw_value)
         return Response(RAIN_STATE)
+
+
+class CongestionPredictionView(APIView):
+    def get(self, request):
+        current_hour = request.query_params.get('hour')
+
+        try:
+            if current_hour is not None:
+                base_hour = int(current_hour)
+            else:
+                base_hour = datetime.now().hour
+        except (TypeError, ValueError):
+            return Response(
+                {'detail': 'hour must be an integer between 0 and 23.'},
+                status=400
+            )
+
+        if base_hour < 0 or base_hour > 23:
+            return Response(
+                {'detail': 'hour must be an integer between 0 and 23.'},
+                status=400
+            )
+
+        result = weighted_prediction(base_hour=base_hour, hours_ahead=2, days_back=30)
+
+        forecast = [
+            {
+                'hour': pred['hour'],
+                'predicted_accidents': pred['count'],
+                'risk_level': pred['risk_level'],
+                'confidence': pred['confidence']
+            }
+            for pred in result['predictions']
+        ]
+
+        return Response({
+            'base_hour': base_hour,
+            'forecast': forecast,
+            'method': result['method'],
+            'model_metrics': result['model_metrics'],
+            'metadata': result['metadata']
+        })
