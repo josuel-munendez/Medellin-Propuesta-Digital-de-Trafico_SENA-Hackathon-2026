@@ -1,4 +1,4 @@
-# 🏙️ UrbanLytics
+# 🏙️ Movilidata OS
 
 ## Plataforma Inteligente de Movilidad Urbana para Medellín
 
@@ -39,7 +39,7 @@ Proyecto desarrollado para el **HackData CTGI SENA 2026**.
 
 # 1. 📖 Introducción
 
-**UrbanLytics** es una plataforma web inteligente enfocada en movilidad urbana, monitoreo vial y visualización geoespacial para la ciudad de Medellín.
+**Movilidata OS** es una plataforma web inteligente enfocada en movilidad urbana, monitoreo vial y visualización geoespacial para la ciudad de Medellín.
 
 El sistema integra:
 
@@ -75,7 +75,7 @@ La plataforma busca convertirse en una herramienta de apoyo para conductores, re
 
 # 2. 🌍 Descripción del Proyecto
 
-**UrbanLytics** funciona como una plataforma de movilidad inteligente inspirada en sistemas como:
+**Movilidata OS** funciona como una plataforma de movilidad inteligente inspirada en sistemas como:
 
 - Waze
 - Google Maps
@@ -110,7 +110,7 @@ Medellín enfrenta múltiples problemas relacionados con movilidad urbana:
 
 Actualmente los usuarios deben utilizar múltiples plataformas para obtener información fragmentada.
 
-**UrbanLytics** busca centralizar toda esta información en una única plataforma inteligente.
+**Movilidata OS** busca centralizar toda esta información en una única plataforma inteligente.
 
 ---
 
@@ -154,7 +154,7 @@ El sistema está orientado inicialmente para Medellín y el área metropolitana.
 
 # 6. 👥 Público Objetivo
 
-**UrbanLytics** está dirigido a:
+**Movilidata OS** está dirigido a:
 
 - Conductores.
 - Repartidores.
@@ -369,7 +369,7 @@ Datasets públicos.
 # 11. 📂 Estructura del Proyecto
 
 ```
-urbanlytics/
+movilidata-os/
 │
 ├── frontend/
 ├── backend/
@@ -461,7 +461,7 @@ Inspirado en:
 
 ## Nombre de Marca
 
-**UrbanLytics**
+**Movilidata OS**
 
 > Urban (Urbano) + Analytics (Analítica)
 
@@ -587,7 +587,7 @@ El usuario:
 
 Contiene:
 
-- Nombre app: **UrbanLytics**.
+- Nombre app: **Movilidata OS**.
 - Iconos.
 - Tema.
 - Configuración instalación.
@@ -664,7 +664,7 @@ Medellín enfrenta problemas de congestión, accidentalidad y desinformación vi
 
 ## Solución
 
-**UrbanLytics** integra tráfico, clima y reportes ciudadanos en una plataforma inteligente.
+**Movilidata OS** integra tráfico, clima y reportes ciudadanos en una plataforma inteligente.
 
 ## Diferencial
 
@@ -699,8 +699,8 @@ Medellín enfrenta problemas de congestión, accidentalidad y desinformación vi
 ## Clonar repositorio
 
 ```bash
-git clone https://github.com/usuario/urbanlytics
-cd urbanlytics
+git clone https://github.com/usuario/movilidata-os
+cd movilidata-os
 ```
 
 ## Frontend
@@ -747,7 +747,7 @@ uvicorn main:app --reload
 
 # 26. ✅ Conclusiones
 
-**UrbanLytics** busca transformar la movilidad urbana de Medellín mediante una plataforma inteligente basada en datos, geolocalización e inteligencia artificial.
+**Movilidata OS** busca transformar la movilidad urbana de Medellín mediante una plataforma inteligente basada en datos, geolocalización e inteligencia artificial.
 
 La solución integra tecnología, experiencia de usuario y analítica avanzada para ofrecer información vial en tiempo real, mejorar la seguridad de los ciudadanos y optimizar los desplazamientos dentro de la ciudad.
 
@@ -755,5 +755,5 @@ El proyecto representa una propuesta moderna, escalable y alineada con tendencia
 
 ---
 
-*© 2026 UrbanLytics — HackData CTGI SENA — Medellín, Colombia*
+*© 2026 Movilidata OS — HackData CTGI SENA — Medellín, Colombia*
 *"La ciudad que se ve en datos"*
