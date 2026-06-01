@@ -9,6 +9,7 @@ export const MEDELLIN_BBOX = {
 }
 
 export const DEFAULT_INCIDENT_FIELDS = '{incidents{type,geometry{type,coordinates},properties{iconCategory}}}'
+export const DEFAULT_INCIDENT_FIELDS = 'incidents'
 
 export function getIncidentColor(category = '') {
   const normalized = String(category).toLowerCase()
@@ -84,6 +85,7 @@ export function useTomTomTraffic() {
     const language = options.language || 'es-CO'
     const t = options.t || Date.now()
     const fields = options.fields || DEFAULT_INCIDENT_FIELDS
+    const language = options.language || 'en-US'
 
     try {
       const url = new URL('https://api.tomtom.com/traffic/services/5/incidentDetails')
@@ -94,6 +96,7 @@ export function useTomTomTraffic() {
       url.searchParams.set('t', String(t))
       url.searchParams.set('categoryFilter', categoryFilter)
       url.searchParams.set('timeValidityFilter', timeValidityFilter)
+      url.searchParams.set('language', language)
 
       const response = await fetch(url)
       if (!response.ok) {

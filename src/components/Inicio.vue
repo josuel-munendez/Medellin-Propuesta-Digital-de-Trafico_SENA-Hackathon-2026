@@ -1,17 +1,35 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend } from 'chart.js'
+import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler } from 'chart.js'
 import { getWeatherData } from '../assets/js/weather'
 import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
 import { getConfiguredEnv } from '../utils/env.js'
+import { fetchZones, fetchCongestionPrediction } from '../services/api.js'
 
-Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend)
+Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler)
+import { Chart, CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler } from 'chart.js'
+import { getWeatherData } from '../assets/js/weather'
+import { useTomTomTraffic, getIncidentColor, getIncidentLabel, normalizeIncidentGeometry } from '../composables/useTomTomTraffic.js'
+import { getConfiguredEnv } from '../utils/env.js'
+import { fetchZones, fetchCongestionPrediction } from '../services/api.js'
+
+Chart.register(CategoryScale, LinearScale, LineController, PointElement, LineElement, Tooltip, Legend, Filler)
 
 const mapContainer = ref(null)
 const chartCanvas = ref(null)
 const weather = ref(null)
 const loading = ref(true)
 const mapError = ref('')
+const zones = ref([])
+const zonesError = ref('')
+const prediction = ref(null)
+const predictionError = ref('')
+const apiConnected = ref(false)
+const zones = ref([])
+const zonesError = ref('')
+const prediction = ref(null)
+const predictionError = ref('')
+const apiConnected = ref(false)
 const {
   trafficSegments,
   trafficIncidents,
@@ -27,6 +45,16 @@ let map
 let chart
 let mapLoaded = false
 let mapboxgl = null
+let leaflet = null
+let heatLayerInstance = null
+let zonesLayerGroup = null
+let trafficLayerGroup = null
+let incidentsLayerGroup = null
+let leaflet = null
+let heatLayerInstance = null
+let zonesLayerGroup = null
+let trafficLayerGroup = null
+let incidentsLayerGroup = null
 
 const alertMessage = computed(() => {
   if (!weather.value) return 'Cargando estado climático...'
@@ -228,41 +256,233 @@ function addAccidentLayer(accidentData) {
 }
 
 function renderApiMapLayers() {
+  if (!mapLoaded || !map) return
+
+  const trafficData = buildTrafficGeoJson()
+  const incidentData = buildIncidentGeoJson()
+
+  if (!trafficData.features.length && !incidentData.features.length) return
+
+  try {
+    if (map.getSource('traffic-segments')) {
+      map.getSource('traffic-segments').setData(trafficData)
+    } else {
+      map.addSource('traffic-segments', { type: 'geojson', data: trafficData })
+      map.addLayer({
+        id: 'traffic-lines',
+        type: 'line',
+        source: 'traffic-segments',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['interpolate', ['linear'], ['get', 'congestionPct'], 0, 3, 100, 8],
+          'line-opacity': 0.9,
+        },
+      })
+    }
+
+    if (map.getSource('traffic-incidents')) {
+      map.getSource('traffic-incidents').setData(incidentData)
+    } else {
+      map.addSource('traffic-incidents', { type: 'geojson', data: incidentData })
+      map.addLayer({
+        id: 'incident-lines',
+        type: 'line',
+        source: 'traffic-incidents',
+        filter: ['==', ['geometry-type'], 'LineString'],
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 5,
+          'line-dasharray': [2, 1],
+        },
+      })
+      map.addLayer({
+        id: 'incident-points',
+        type: 'circle',
+        source: 'traffic-incidents',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: {
+          'circle-color': ['get', 'color'],
+          'circle-radius': 7,
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 2,
+        },
+      })
+    }
+  } catch (e) {
+    console.warn('[Inicio] Error rendering Mapbox layers:', e)
+  }
+}
+
+async function initLeafletMap(accidents) {
+  if (!leaflet) {
+    try {
+      const [L, heat] = await Promise.all([
+        import('leaflet'),
+        import('leaflet.heat'),
+      ])
+      leaflet = L
+      if (typeof heat.default === 'function') {
+        heat.default(L)
+      }
+    } catch (importErr) {
+      console.warn('[Inicio] Leaflet import failed:', importErr?.message || importErr)
+      throw new Error('Leaflet could not be loaded')
+    }
+  }
+
+  if (!leaflet || !mapContainer.value) {
+    throw new Error('Leaflet or container not available')
+  }
+
+  map = leaflet.map(mapContainer.value, {
+    center: [6.25184, -75.56359],
+    zoom: 12,
+    zoomControl: true,
+  })
+
+  leaflet
+    .tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: 'OpenStreetMap contributors',
+      maxZoom: 19,
+    })
+    .addTo(map)
+
+  map.on('load', () => {
+    mapLoaded = true
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
+  })
+
+  // Leaflet fires 'load' synchronously when map is created, trigger layers after next tick
+  setTimeout(() => {
+    mapLoaded = true
+    addAccidentHeatLayer(buildAccidentGeoJson(accidents))
+    addZonesGeoLayer()
+    renderTrafficLayers()
+  }, 200)
+}
+
+function addAccidentHeatLayer(accidentData) {
+  if (!mapLoaded || heatLayerInstance) return
+
+  const points = accidentData.features.map((f) => {
+    const intensity = f.properties?.intensity ?? 0.5
+    return [f.geometry.coordinates[1], f.geometry.coordinates[0], intensity]
+  })
+
+  if (points.length && leaflet.heatLayer) {
+    heatLayerInstance = leaflet
+      .heatLayer(points, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 15,
+        max: 1.0,
+        gradient: { 0: '#16a34a', 0.3: '#22c55e', 0.55: '#eab308', 0.78: '#f97316', 1: '#dc2626' },
+      })
+      .addTo(map)
+  }
+}
+
+function addZonesGeoLayer() {
+  if (!mapLoaded || !zones.value.length || zonesLayerGroup) return
+
+  const riskColors = { alta: '#dc2626', media: '#eab308', baja: '#22c55e' }
+
+  const features = zones.value
+    .filter((z) => {
+      try {
+        const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+        return geom && geom.type && geom.coordinates
+      } catch { return false }
+    })
+    .map((z) => {
+      const geom = typeof z.geometry === 'string' ? JSON.parse(z.geometry) : z.geometry
+      return {
+        type: 'Feature',
+        geometry: geom,
+        properties: { name: z.name, risk_level: z.risk_level },
+      }
+    })
+
+  if (!features.length) return
+
+  zonesLayerGroup = leaflet
+    .geoJSON(
+      { type: 'FeatureCollection', features },
+      {
+        style: (feature) => ({
+          color: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillColor: riskColors[feature.properties?.risk_level] || '#64748b',
+          fillOpacity: 0.12,
+          weight: 2,
+          opacity: 0.6,
+        }),
+        onEachFeature: (feature, layer) => {
+          if (feature.properties?.name) {
+            layer.bindTooltip(feature.properties.name, {
+              permanent: true,
+              direction: 'center',
+              className: 'zone-label',
+            })
+          }
+        },
+      },
+    )
+    .addTo(map)
+}
+
+function renderTrafficLayers() {
   if (!mapLoaded) return
 
   const trafficData = buildTrafficGeoJson()
   const incidentData = buildIncidentGeoJson()
 
-  if (map.getSource('traffic-segments')) {
-    map.getSource('traffic-segments').setData(trafficData)
-  } else {
-    map.addSource('traffic-segments', { type: 'geojson', data: trafficData })
-    map.addLayer({
-      id: 'traffic-lines',
-      type: 'line',
-      source: 'traffic-segments',
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': ['interpolate', ['linear'], ['get', 'congestionPct'], 0, 3, 100, 8],
-        'line-opacity': 0.9,
+  if (trafficLayerGroup) {
+    trafficLayerGroup.remove()
+  }
+  trafficLayerGroup = leaflet
+    .geoJSON(trafficData, {
+      style: (feature) => ({
+        color: feature.properties?.color || '#22c55e',
+        weight: Math.max(3, (feature.properties?.congestionPct || 0) / 20),
+        opacity: 0.9,
+      }),
+    })
+    .addTo(map)
+
+  if (incidentsLayerGroup) {
+    incidentsLayerGroup.remove()
+  }
+  incidentsLayerGroup = leaflet
+    .geoJSON(incidentData, {
+      pointToLayer: (feature, latlng) =>
+        leaflet.circleMarker(latlng, {
+          radius: 7,
+          fillColor: feature.properties?.color || '#eab308',
+          color: '#ffffff',
+          weight: 2,
+          fillOpacity: 1,
+        }),
+      style: (feature) => {
+        if (feature.geometry?.type === 'LineString') {
+          return {
+            color: feature.properties?.color || '#eab308',
+            weight: 5,
+            dashArray: '6,3',
+            opacity: 0.9,
+          }
+        }
+        return {}
+      },
+      onEachFeature: (feature, layer) => {
+        if (feature.properties?.label) {
+          layer.bindPopup(feature.properties.label)
+        }
       },
     })
-  }
-
-  if (map.getSource('traffic-incidents')) {
-    map.getSource('traffic-incidents').setData(incidentData)
-  } else {
-    map.addSource('traffic-incidents', { type: 'geojson', data: incidentData })
-    map.addLayer({
-      id: 'incident-lines',
-      type: 'line',
-      source: 'traffic-incidents',
-      filter: ['==', ['geometry-type'], 'LineString'],
-      paint: {
-        'line-color': ['get', 'color'],
-        'line-width': 5,
-        'line-dasharray': [2, 1],
-      },
+    .addTo(map)
+}
     })
     map.addLayer({
       id: 'incident-points',
@@ -277,6 +497,50 @@ function renderApiMapLayers() {
       },
     })
   }
+  if (trafficLayerGroup) {
+    trafficLayerGroup.remove()
+  }
+  trafficLayerGroup = leaflet
+    .geoJSON(trafficData, {
+      style: (feature) => ({
+        color: feature.properties?.color || '#22c55e',
+        weight: Math.max(3, (feature.properties?.congestionPct || 0) / 20),
+        opacity: 0.9,
+      }),
+    })
+    .addTo(map)
+
+  if (incidentsLayerGroup) {
+    incidentsLayerGroup.remove()
+  }
+  incidentsLayerGroup = leaflet
+    .geoJSON(incidentData, {
+      pointToLayer: (feature, latlng) =>
+        leaflet.circleMarker(latlng, {
+          radius: 7,
+          fillColor: feature.properties?.color || '#eab308',
+          color: '#ffffff',
+          weight: 2,
+          fillOpacity: 1,
+        }),
+      style: (feature) => {
+        if (feature.geometry?.type === 'LineString') {
+          return {
+            color: feature.properties?.color || '#eab308',
+            weight: 5,
+            dashArray: '6,3',
+            opacity: 0.9,
+          }
+        }
+        return {}
+      },
+      onEachFeature: (feature, layer) => {
+        if (feature.properties?.label) {
+          layer.bindPopup(feature.properties.label)
+        }
+      },
+    })
+    .addTo(map)
 }
 
 onMounted(async () => {
@@ -293,7 +557,34 @@ onMounted(async () => {
 
     weather.value = weatherData
 
-    await initMapbox(accidents)
+    // Cargar zonas de riesgo desde Django API
+    try {
+      const zonesData = await fetchZones()
+      zones.value = Array.isArray(zonesData) ? zonesData : []
+      apiConnected.value = true
+    } catch (err) {
+      zonesError.value = 'Zonas no disponibles (Django API)'
+      console.warn('[Inicio] Zonas API:', err.message)
+    }
+
+    // Mapbox como primario, Leaflet como fallback
+    let mapInitialized = false
+    try {
+      await initMapbox(accidents)
+      mapInitialized = true
+    } catch (err) {
+      console.warn('[Inicio] Mapbox init failed, trying Leaflet:', err?.message || err)
+      mapError.value = 'Mapbox no disponible, usando Leaflet como respaldo.'
+    }
+    if (!mapInitialized) {
+      try {
+        await initLeafletMap(accidents)
+        mapInitialized = true
+      } catch (err2) {
+        console.warn('[Inicio] Leaflet also failed:', err2?.message || err2)
+        mapError.value = 'No fue posible cargar el mapa. El resto del panel sigue disponible.'
+      }
+    }
 
     // Configurar gráfica interactiva
     const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
@@ -360,19 +651,44 @@ onMounted(async () => {
       },
     })
 
+    // Cargar datos de tráfico TomTom
     if (!apiKey) {
-      trafficError.value = 'Configura VITE_TOMTOM_API_KEY para activar TomTom Traffic.'
-      incidentsError.value = 'Configura VITE_TOMTOM_API_KEY para activar TomTom Incidents.'
       trafficSegments.value = []
       trafficIncidents.value = []
-      return
+    } else {
+      const [trafficResult, incidentsResult] = await Promise.allSettled([
+        loadTrafficSegments(roads, apiKey),
+        loadTrafficIncidents(apiKey),
+      ])
+      if (trafficResult.status === 'rejected') {
+        console.warn('[Inicio] Traffic segments:', trafficResult.reason?.message)
+      }
+      if (incidentsResult.status === 'rejected') {
+        console.warn('[Inicio] Incidents:', incidentsResult.reason?.message)
+      }
+      // Render layers on whichever map is active
+      if (mapInitialized) {
+        try {
+          if (typeof mapboxgl !== 'undefined' && mapboxgl && mapboxgl.Map && map instanceof mapboxgl.Map) {
+            renderApiMapLayers()
+          } else {
+            renderTrafficLayers()
+          }
+        } catch (e) {
+          renderTrafficLayers()
+        }
+      }
     }
 
-    await Promise.all([
-      loadTrafficSegments(roads, apiKey),
-      loadTrafficIncidents(apiKey),
-    ])
-    renderApiMapLayers()
+    // Cargar predicción de congestión desde Django
+    try {
+      const currentHour = new Date().getHours()
+      const predictionData = await fetchCongestionPrediction(currentHour)
+      prediction.value = predictionData
+    } catch (err) {
+      predictionError.value = 'Predicción no disponible'
+      console.warn('[Inicio] Predicción:', err.message)
+    }
   } catch (error) {
     console.error('Error al inicializar el dashboard de inicio:', error)
     trafficError.value = 'No fue posible cargar TomTom Traffic.'
@@ -397,14 +713,131 @@ onBeforeUnmount(() => {
       <div class="col-md-8">
         <h1 class="h3 fw-bold text-dark mb-1">Panel de Control de Movilidad</h1>
         <p class="text-muted mb-0">Información en tiempo real sobre incidentes, congestión y alertas viales en Medellín.</p>
-      </div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
       <div class="col-md-4 text-md-end mt-3 mt-md-0">
         <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
           <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
           Monitoreo Activo
         </span>
-      </div>
+        <div class="d-flex gap-2 justify-content-md-end flex-wrap">
+          <span class="badge bg-primary px-3 py-2 rounded-pill shadow-sm">
+            <span class="spinner-grow spinner-grow-sm me-1" role="status" aria-hidden="true" style="animation-duration: 1.5s;"></span>
+            Monitoreo Activo
+          </span>
+          <span v-if="apiConnected" class="badge bg-success px-3 py-2 rounded-pill shadow-sm">
+            Django API ✓
+          </span>
+        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
     </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
     <!-- Primera Fila: Mapa y Clima -->
     <div class="row g-4 mb-4">
@@ -414,14 +847,179 @@ onBeforeUnmount(() => {
             <div class="d-flex justify-content-between align-items-center mb-3">
               <h5 class="fw-bold text-dark m-0">Mapa Operativo Mapbox</h5>
               <span class="text-muted small"><i class="bi bi-geo-alt-fill me-1"></i>Accidentes, tráfico e incidentes</span>
-            </div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
             <div v-if="mapError" class="alert alert-warning py-2 small mb-3 border-0">
               {{ mapError }}
-            </div>
-            <div ref="mapContainer" class="map-container rounded border shadow-inner"></div>
-          </div>
-        </div>
-      </div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+            <div v-if="mapError" class="alert alert-warning py-2 small mb-3 border-0">
+  {{ mapError }}
+</div>
+<div ref="mapContainer" class="map-container rounded border shadow-inner">
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+          
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
       <div class="col-lg-4">
         <div class="card h-100 shadow-sm border-0 card-hover-effect card-gradient-bg">
@@ -432,12 +1030,93 @@ onBeforeUnmount(() => {
                 <div class="weather-temp-container me-3 bg-white p-3 rounded-4 shadow-sm border">
                   <span class="display-5 fw-bold text-primary">{{ weather?.temperature ?? '21' }}°</span>
                   <span class="text-muted">C</span>
-                </div>
+                
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                 <div>
                   <h4 class="fw-semibold mb-0 text-dark">{{ weather?.location || 'Medellín, CO' }}</h4>
                   <p class="text-capitalize text-muted mb-0">{{ weather?.condition || 'Nublado parcial' }}</p>
-                </div>
-              </div>
+                
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
               
               <div class="alert mt-3" :class="alertClass" role="alert">
                 <div class="d-flex">
@@ -448,25 +1127,296 @@ onBeforeUnmount(() => {
                     <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-check-circle-fill text-success" viewBox="0 0 16 16">
                       <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0m-3.97-3.03a.75.75 0 0 0-1.08.022L7.477 9.417 5.384 7.323a.75.75 0 0 0-1.06 1.06L6.97 11.03a.75.75 0 0 0 1.079-.02l3.992-4.99a.75.75 0 0 0-.01-1.05z"/>
                     </svg>
-                  </div>
+                  
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                   <div>
                     {{ alertMessage }}
-                  </div>
-                </div>
-              </div>
-            </div>
+                  
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
             <div class="mt-4 pt-3 border-top">
               <p class="text-muted small mb-0">
                 <i class="bi bi-info-circle me-1"></i>
                 Fuente: {{ weather?.source === 'siata' ? 'SIATA en vivo' : 'respaldo local por falta de respuesta SIATA' }}.
                 <span v-if="weather?.rainfallForecast !== null"> Lluvia: {{ weather.rainfallForecast }}%</span>
+                <span v-if="weather?.rainfallForecast != null"> Lluvia: {{ weather.rainfallForecast }}%</span>
               </p>
-            </div>
-          </div>
-        </div>
-      </div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
     </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+          
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
     <!-- Segunda Fila: Gráfico de Tendencias Horarias (Chart.js) -->
     <div class="row mb-4">
@@ -477,7 +1427,34 @@ onBeforeUnmount(() => {
               <div>
                 <h5 class="fw-bold text-dark mb-1">Tendencias Horarias Consolidadas</h5>
                 <p class="text-muted small mb-0">Comparativa entre incidencias registradas y niveles promedio de congestión vehicular.</p>
-              </div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
               <div class="d-flex gap-2">
                 <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-3 py-2 rounded">
                   Accidentalidad
@@ -485,21 +1462,264 @@ onBeforeUnmount(() => {
                 <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded">
                   Congestión %
                 </span>
-              </div>
-            </div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
             <div class="chart-container" style="position: relative; height: 320px; width: 100%">
               <canvas ref="chartCanvas" aria-label="Gráfico interactivo de tráfico y accidentes"></canvas>
-            </div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
             <div v-if="loading" class="d-flex align-items-center justify-content-center mt-3 py-4">
               <div class="spinner-border text-primary me-2" role="status">
                 <span class="visually-hidden">Cargando...</span>
-              </div>
-              <span class="text-muted">Cargando visualizaciones analíticas...</span>
-            </div>
-          </div>
-        </div>
-      </div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
     </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+              <span class="text-muted">Cargando visualizaciones analíticas...</span>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+          
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
     <!-- Tercera Fila: Flujos TomTom en Tiempo Real -->
     <div class="row mt-4">
@@ -513,7 +1733,34 @@ onBeforeUnmount(() => {
                   Datos en vivo de velocidad y congestión tomados desde
                   <span class="badge bg-secondary-subtle text-secondary border">TomTom Traffic API</span>
                 </p>
-              </div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
               <div class="d-flex gap-2 flex-wrap align-items-center">
                 <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill">
                   Promedio {{ trafficSummary.average }}%
@@ -530,8 +1777,62 @@ onBeforeUnmount(() => {
                 <span v-if="incidentsLoading" class="badge bg-info text-dark px-3 py-2 rounded-pill">
                   Cargando incidentes...
                 </span>
-              </div>
-            </div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
             <div class="routes-chart-area">
               <div class="row g-3">
@@ -540,16 +1841,126 @@ onBeforeUnmount(() => {
                     <div class="mb-2 d-flex align-items-center gap-2">
                       <span class="badge bg-primary">Mapa de Flujos Activos</span>
                       <span class="text-muted small">Medellín — Segmentos TomTom</span>
-                    </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div v-if="trafficError" class="alert alert-warning py-2 small mb-3 border-0">
                       {{ trafficError }}
-                    </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div v-if="incidentsError" class="alert alert-warning py-2 small mb-3 border-0">
                       {{ incidentsError }}
-                    </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div v-if="!trafficLoading && !trafficSegments.length" class="text-muted small py-3">
                       No hay segmentos TomTom disponibles en este momento.
-                    </div>
+                    <div v-if="!trafficLoading && !trafficSegments.length" class="text-muted small py-3">
+                      <i class="bi bi-info-circle me-1"></i>Datos de tráfico en tiempo real requieren clave TomTom API.
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div v-for="(route, idx) in trafficSegments.slice(0, 10)" :key="route.name"
                       class="route-flow-bar d-flex align-items-center gap-2 mb-2 p-2 rounded-3">
                       <span class="route-number text-white rounded-2 px-2 py-1"
@@ -557,10 +1968,64 @@ onBeforeUnmount(() => {
                         {{ String(idx + 1).padStart(2, '0') }}
                       </span>
                       <div class="flex-grow-1">
-                        <div class="small fw-semibold text-dark mb-1">{{ route.name || 'Vía TomTom' }}</div>
+                        <div class="small fw-semibold text-dark mb-1">{{ route.name || 'Vía TomTom' }}
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                         <div class="text-muted x-small mb-1">
                           {{ route.currentSpeed }} km/h vs {{ route.freeFlowSpeed }} km/h libres
-                        </div>
+                        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                         <div class="progress" style="height:6px;">
                           <div class="progress-bar progress-bar-striped progress-bar-animated"
                             :class="route.congestionPct >= 85 ? 'bg-danger' : route.congestionPct >= 70 ? 'bg-warning' : 'bg-success'"
@@ -568,44 +2033,530 @@ onBeforeUnmount(() => {
                             role="progressbar"
                             :aria-valuenow="route.congestionPct"
                             aria-valuemin="0" aria-valuemax="100">
-                          </div>
-                        </div>
-                      </div>
+                          
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                       <span class="fw-bold small"
                         :class="route.congestionPct >= 85 ? 'text-danger' : route.congestionPct >= 70 ? 'text-warning' : 'text-success'">
                         {{ route.congestionPct }}%
                       </span>
-                    </div>
-                  </div>
-                </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                  
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 
                 <div class="col-md-4">
                   <div class="h-100 d-flex flex-column gap-3">
                     <div class="card border-0 bg-danger-subtle p-3 text-center rounded-4">
-                      <div class="fs-1 fw-black text-danger">{{ trafficSummary.heavy }}</div>
-                      <div class="small text-danger fw-semibold">Rutas en Nivel Crítico (&ge;85%)</div>
-                    </div>
+                      <div class="fs-1 fw-black text-danger">{{ trafficSummary.heavy }}
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div class="small text-danger fw-semibold">Rutas en Nivel Crítico (&ge;85%)
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div class="card border-0 bg-primary-subtle p-3 text-center rounded-4">
                       <div class="fs-1 fw-black text-primary">
                         {{ trafficSummary.average }}%
-                      </div>
-                      <div class="small text-primary fw-semibold">Congestión Promedio</div>
-                    </div>
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div class="small text-primary fw-semibold">Congestión Promedio
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div class="card border-0 bg-info-subtle p-3 text-center rounded-4">
-                      <div class="fs-1 fw-black text-info">{{ incidentSummary.accidents }}</div>
-                      <div class="small text-info fw-semibold">Incidentes tipo accidente</div>
-                    </div>
+                      <div class="fs-1 fw-black text-info">{{ incidentSummary.accidents }}
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div class="small text-info fw-semibold">Incidentes tipo accidente
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div class="card border-0 bg-secondary-subtle p-3 rounded-4">
                       <p class="x-small text-secondary mb-1">
                         <strong>Fuente técnica:</strong> TomTom Traffic API <code>flowSegmentData</code> sobre
                         puntos estratégicos de Medellín, sin usar la capa estática anterior.
                       </p>
-                    </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                     <div class="card border-0 bg-white p-3 rounded-4 shadow-sm">
-                      <div class="small fw-semibold mb-2">Incidentes recientes</div>
+                      <div class="small fw-semibold mb-2">Incidentes recientes
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                       <div v-if="trafficIncidents.length === 0" class="text-muted x-small">
                         No se detectaron incidentes activos en el bbox actual.
-                      </div>
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
                       <ul v-else class="list-unstyled mb-0 incident-mini-list">
                         <li v-for="incident in trafficIncidents.slice(0, 4)" :key="incident?.properties?.id || incident.type">
                           <span class="incident-mini-dot" :style="{ background: getIncidentColor(incident?.properties?.iconCategory) }"></span>
@@ -614,17 +2565,503 @@ onBeforeUnmount(() => {
                           </span>
                         </li>
                       </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
     </div>
   </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+
+                    <!-- Predicción de congestión desde Django -->
+                    <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+                      <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div class="x-small text-muted mb-2">
+                        Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+                        <span class="badge rounded-pill small"
+                          :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+                        </span>
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+
+                    <!-- Zonas de riesgo desde Django -->
+                    <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+                      <div class="small fw-semibold mb-2">Zonas de riesgo (Django)
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                      <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="x-small">{{ zone.name }}</span>
+                        <span class="badge rounded-pill small"
+                          :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+                          {{ zone.risk_level }}
+                        </span>
+                      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                  
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+                
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+              
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+            
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+
+          
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+        
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+      
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+    
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
+  
+  <!-- Predicción de congestión desde Django -->
+  <div v-if="prediction" class="card border-0 bg-dark-subtle p-3 rounded-4">
+    <div class="small fw-semibold mb-2 text-dark">Predicción IA (próximas 2h)</div>
+    <div class="x-small text-muted mb-2">
+      Método: <code>{{ prediction.method }}</code> · Hora base: {{ prediction.base_hour }}:00
+    </div>
+    <div v-for="item in prediction.forecast" :key="item.hour" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ String(item.hour).padStart(2, '0') }}:00</span>
+      <span class="badge rounded-pill small"
+        :class="item.risk_level === 'alta' ? 'bg-danger' : item.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ item.predicted_accidents }} acc. · {{ item.risk_level }}
+      </span>
+    </div>
+  </div>
+
+  <!-- Zonas de riesgo desde Django -->
+  <div v-if="zones.length" class="card border-0 bg-light p-3 rounded-4">
+    <div class="small fw-semibold mb-2">Zonas de riesgo (Django)</div>
+    <div v-for="zone in zones" :key="zone.id" class="d-flex justify-content-between align-items-center mb-1">
+      <span class="x-small">{{ zone.name }}</span>
+      <span class="badge rounded-pill small"
+        :class="zone.risk_level === 'alta' ? 'bg-danger' : zone.risk_level === 'media' ? 'bg-warning text-dark' : 'bg-success'">
+        {{ zone.risk_level }}
+      </span>
+    </div>
+  </div>
+</div>
 </template>
 
 <style scoped>

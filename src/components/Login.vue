@@ -1,5 +1,10 @@
 <script setup>
 import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
+import { loginUser, logoutUser, fetchDashboard } from '../services/api.js'
+
+const TOKEN_KEY = 'movilidata-auth-token'
+const USER_KEY = 'movilidata-auth-user'
 
 const form = reactive({
   username: '',
@@ -16,6 +21,28 @@ const showPassword = ref(false)
 const isSubmitting = ref(false)
 const isLoggedIn = ref(false)
 const loginError = ref('')
+const authToken = ref(null)
+const user = ref(null)
+const dashboard = ref(null)
+
+// Restaurar sesión si existe token guardado
+onMounted(async () => {
+  const savedToken = localStorage.getItem(TOKEN_KEY)
+  if (savedToken) {
+    try {
+      const data = await fetchDashboard(savedToken)
+      authToken.value = savedToken
+      dashboard.value = data
+      const savedUser = localStorage.getItem(USER_KEY)
+      user.value = savedUser ? JSON.parse(savedUser) : null
+      isLoggedIn.value = true
+    } catch {
+      // Token expirado o inválido — limpiar
+      localStorage.removeItem(TOKEN_KEY)
+      localStorage.removeItem(USER_KEY)
+    }
+  }
+})
 
 function togglePassword() {
   showPassword.value = !showPassword.value
@@ -50,6 +77,7 @@ function validateForm() {
 }
 
 function handleLogin() {
+async function handleLogin() {
   loginError.value = ''
   if (!validateForm()) return
 
@@ -73,6 +101,43 @@ function handleLogin() {
 
 function handleLogout() {
   isLoggedIn.value = false
+  try {
+    const response = await loginUser(form.username, form.password)
+
+    authToken.value = response.token
+    user.value = response.user
+    dashboard.value = response.dashboard
+    isLoggedIn.value = true
+
+    // Persistir token y usuario para restaurar sesión
+    localStorage.setItem(TOKEN_KEY, response.token)
+    localStorage.setItem(USER_KEY, JSON.stringify(response.user))
+  } catch (err) {
+    if (err.status === 401) {
+      loginError.value = 'Usuario o contraseña incorrectos. Verifica tus credenciales.'
+    } else {
+      loginError.value = 'No se pudo conectar con el servidor. Asegúrate de que Django esté corriendo en el puerto 8000.'
+    }
+  } finally {
+    isSubmitting.value = false
+  }
+}
+
+async function handleLogout() {
+  if (authToken.value) {
+    try {
+      await logoutUser(authToken.value)
+    } catch {
+      // Ignorar errores al cerrar sesión
+    }
+  }
+
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+  isLoggedIn.value = false
+  authToken.value = null
+  user.value = null
+  dashboard.value = null
   form.username = ''
   form.password = ''
   form.rememberMe = false
@@ -84,6 +149,7 @@ function handleLogout() {
     
     <!-- Estado: Sesión Activa / Administrador -->
     <div v-if="isLoggedIn" class="glass-card p-4 p-md-5 rounded-4 border shadow text-center animate-scale-up" style="max-width: 480px; width: 100%">
+    <div v-if="isLoggedIn" class="glass-card p-4 p-md-5 rounded-4 border shadow text-center animate-scale-up" style="max-width: 520px; width: 100%">
       <div class="admin-avatar mx-auto mb-4 bg-gradient-success">
         <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" fill="currentColor" viewBox="0 0 16 16">
           <path d="M11 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0m-9 8c0 1 1 1 1 1h10s1 0 1-1-1-4-6-4-6 3-6 4m7-11a.5.5 0 0 1 .5.5v1.5H10a.5.5 0 0 1 0 1H8.5V11a.5.5 0 0 1-1 0V9H6a.5.5 0 0 1 0-1h1.5V5.5A.5.5 0 0 1 8 5"/>
@@ -96,6 +162,40 @@ function handleLogout() {
         <h6 class="fw-bold mb-1 small text-dark"><i class="bi bi-shield-lock-fill me-1"></i>Sesión del Hackathon 2026</h6>
         <p class="mb-0 small text-secondary">Tienes permisos para simular reportes de colisiones e ingresar nuevos flujos de tráfico en la base de datos.</p>
       </div>
+
+      <p class="text-success small fw-semibold mb-3">
+        {{ dashboard?.greeting || 'Panel de administración activo' }}
+      </p>
+
+      <!-- Info del usuario -->
+      <div v-if="user" class="alert border-0 shadow-sm text-start mb-3 py-3"
+        :class="dashboard?.role === 'admin' ? 'alert-info' : 'alert-light'">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <span class="badge rounded-pill" :class="dashboard?.role === 'admin' ? 'bg-primary' : 'bg-secondary'">
+            {{ dashboard?.role === 'admin' ? 'Administrador' : 'Usuario' }}
+          </span>
+          <strong class="small">{{ user.full_name || user.username }}</strong>
+        </div>
+        <p class="mb-0 small text-secondary">{{ user.email || 'Sin correo registrado' }}</p>
+      </div>
+
+      <!-- Resumen del dashboard -->
+      <div v-if="dashboard?.summary" class="row g-2 mb-4">
+        <div v-for="(value, key) in dashboard.summary" :key="key" class="col-6">
+          <div class="bg-light rounded-3 p-2">
+            <div class="fw-bold text-dark">{{ value }}</div>
+            <div class="x-small text-muted text-capitalize">{{ key.replace(/_/g, ' ') }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Highlights -->
+      <ul v-if="dashboard?.highlights" class="text-start list-unstyled mb-4">
+        <li v-for="(item, idx) in dashboard.highlights" :key="idx" class="small text-secondary mb-2 d-flex gap-2">
+          <span class="text-primary flex-shrink-0">●</span>
+          <span>{{ item }}</span>
+        </li>
+      </ul>
 
       <div class="d-grid gap-2">
         <button @click="handleLogout" class="btn btn-outline-danger rounded-pill py-2 border shadow-sm-hover">
@@ -245,6 +345,10 @@ function handleLogout() {
 
 .bg-gradient-success {
   background: linear-gradient(135deg, #198754 0%, #20c997 100%);
+}
+
+.x-small {
+  font-size: 0.72rem;
 }
 
 .py-2\.5 {

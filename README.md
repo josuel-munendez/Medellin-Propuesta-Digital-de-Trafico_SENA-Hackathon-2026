@@ -1,52 +1,85 @@
 # Medellín Movilidata OS
 
-Aplicación web front-end (hackathon HackData CTGI SENA 2026) para visualizar siniestralidad, congestión y alertas climáticas de movilidad en Medellín.
+MVP full stack para HackData CTGI SENA 2026 con backend en Django REST, frontend en Vue 3 / React 18 y soporte PWA.
+
+## Estructura
+- `backend/` Proyecto Django + SQLite + DRF
+- `frontend/` SPA Vue 3 + Vite + PWA
+- `frontend-react/` SPA React 18 + Vite + Tailwind + PWA
+- `docs/` Manual técnico, manual de usuario y guía de marca
+- `screenshots/` Capturas de pantalla de soporte
 
 ## Objetivo
 Reducir riesgos de movilidad urbana mediante:
 - Identificación de puntos críticos de accidentes.
 - Lectura de tendencias horarias de accidentalidad y congestión.
 - Alertas de seguridad en escenarios de lluvia.
+- Predicción ML de congestión vehicular.
+
+## Arquitectura
+- **Model**: `backend/api/models.py` define `Accident`, `Zone` y `WeatherRecord`.
+- **View/Controller**: `backend/api/views.py` expone la API REST.
+- **View**: `frontend/src/App.vue` (Vue) / `frontend-react/src/App.jsx` (React) consumen la API y renderizan el dashboard.
 
 ## Tecnologías
-- Vue 3 + Vite
-- Bootstrap 5
-- Mapbox GL JS
-- Leaflet + leaflet.heat
-- Chart.js
-- TomTom Traffic API
-- SIATA
-- PWA con vite-plugin-pwa
-- Datos estáticos JSON para siniestralidad y vías base
 
-## Estructura principal
-- `src/main.js`, `src/App.vue`
-- `src/assets/css/`, `src/assets/js/`
-- `public/assets/data/` (JSON de muestra)
-- `public/assets/img/` (logos placeholder)
-- `docs/` (manual técnico, usuario y branding)
-- `screenshots/` (espacio para capturas)
+### Backend
+- Python 3.11+ / Django 5.1+ / DRF 3.15+
+- SQLite / MySQL / scikit-learn
+
+### Frontend Vue 3
+- Vue 3.5 + Vite 8
+- Bootstrap 5 / Leaflet + leaflet.heat / Mapbox GL JS
+- Chart.js / ECharts / TomTom Traffic API / SIATA
+
+### Frontend React 18
+- React 18.3 + Vite 5 + Tailwind CSS 4
+- React Router 6 / Axios / Context API
+- Leaflet + leaflet.heat / Chart.js + react-chartjs-2
+- TomTom Traffic API / SIATA / OpenWeather
+
+### PWA
+- Manifest y service worker con `vite-plugin-pwa`
+- Fallback offline en `frontend/public/offline.html` (Vue) y `frontend-react/public/offline.html` (React)
 
 ## Requisitos
-- Node.js 20+
-- npm 10+
+- Python 3.11+ para backend
+- Node.js 20+ y npm 10+ para frontend
 
-## Instalación y ejecución
+## Backend
 ```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py load_data
+python manage.py runserver
+```
+
+API principal:
+- `GET /api/accidents/`
+- `GET /api/accidents/?hour_from=6&hour_to=12`
+- `GET /api/zones/`
+- `GET /api/weather/`
+- `POST /api/simulate_rain/`
+
+## Frontend (Vue 3)
+```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-## Build de producción
+## Frontend (React 18)
 ```bash
-npm run build
-npm run preview
+cd frontend-react
+npm install
+cp .env.example .env.local
+npm run dev
 ```
 
-## PWA
-La aplicación incluye:
-- `manifest.json` generado por Vite PWA
-- Service Worker con fallback a `offline.html`
+El frontend consume `http://localhost:8000/api/...` por defecto. Si necesitas otra URL, define `VITE_API_BASE_URL`.
 
 ## Clima SIATA
 El clima y pronóstico local se consulta desde datos públicos de SIATA. Si el servidor no responde
@@ -66,8 +99,11 @@ Para usar los estilos oficiales e interacción de Mapbox GL JS:
 ```bash
 VITE_MAPBOX_ACCESS_TOKEN=tu_token_publico
 ```
+Si no hay token, la app usa Leaflet como respaldo con teselas OSM.
 
-Si no hay token, la app mantiene el mapa visible con teselas OSM dentro de Mapbox GL JS.
+## Predicción ML
+El backend incluye un modelo scikit-learn que predice la congestión vehicular
+con 2 horas de antelación basado en datos históricos.
 
 Fuentes SIATA usadas:
 - `https://siata.gov.co/data/scroll/temperatura2.json`
@@ -77,27 +113,16 @@ Fuentes SIATA usadas:
 Reemplaza los archivos:
 - `public/assets/data/accidents.json`
 - `public/assets/data/medellin-roads.json`
+- `backend/data/accidents.json`
+- `backend/data/zones.json`
 
-La capa de tráfico e incidentes en vivo ahora sale directamente de TomTom, así que solo necesitas
+La capa de tráfico e incidentes en vivo sale directamente de TomTom, así que solo necesitas
 mantener las coordenadas base y configurar `VITE_TOMTOM_API_KEY`.
 
 ## Despliegue
-### Netlify
-1. Conecta el repositorio.
-2. Build command: `npm run build`
-3. Publish directory: `dist`
+- En desarrollo se ejecutan backend y frontend por separado.
+- Para producción, puedes compilar Vue/React y servirlo detrás de Django o publicarlo aparte.
 
-### GitHub Pages
-1. Ejecuta `npm run build`.
-2. Publica la carpeta `dist` con la estrategia que uses en tu flujo CI/CD.
-
-## Capturas
-Agregar imágenes en `screenshots/` y enlazarlas aquí.
-
-## Video demo
-Agregar enlace del video demo aquí: **[pendiente]**
-
-## Equipo (placeholder)
-- Rol 1: Pendiente
-- Rol 2: Pendiente
-- Rol 3: Pendiente
+## Evidencias
+- Agrega capturas en `screenshots/`.
+- Completa el video demo cuando esté listo.

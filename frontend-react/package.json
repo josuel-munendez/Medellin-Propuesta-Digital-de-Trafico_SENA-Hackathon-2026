@@ -1,0 +1,36 @@
+{
+  "name": "urbanlytics-react-frontend",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Plataforma Inteligente de Movilidad Urbana para Medellín - React Frontend",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0",
+    "leaflet": "^1.9.4",
+    "leaflet.heat": "^0.2.0",
+    "mapbox-gl": "^3.24.0",
+    "chart.js": "^4.5.1",
+    "react-chartjs-2": "^5.2.0",
+    "axios": "^1.7.4",
+    "@tailwindcss/vite": "^4.0.0",
+    "tailwindcss": "^4.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "vite-plugin-pwa": "^0.20.0"
+  }
+}
