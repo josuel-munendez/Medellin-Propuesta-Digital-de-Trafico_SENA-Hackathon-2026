@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 *.local
+__pycache__/
+*.pyc
 backend/venv
 backend/db.sqlite3
 frontend/node_modules
