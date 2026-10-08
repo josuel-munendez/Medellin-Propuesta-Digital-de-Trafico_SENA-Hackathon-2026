@@ -2,7 +2,7 @@
 
 ## Plataforma Inteligente de Movilidad Urbana para Medellín
 
-Proyecto desarrollado para el **HackData CTGI SENA 2026**.
+Proyecto desarrollado para el **HackData CTGI SENA 2026** como parrte del proceso: **MEDELLÍN MOVILIDATA OS: Ecosistema de Analítica Predictiva e Inteligencia Vial**.
 
 ---
 
